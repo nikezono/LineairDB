@@ -14,7 +14,7 @@
  *   limitations under the License.
  */
 
-#include "epoch_based_range_index.h"
+#include "lock_based_index.h"
 
 #include <algorithm>
 #include <atomic>
@@ -30,7 +30,7 @@
 namespace LineairDB {
 namespace Index {
 
-EpochBasedRangeIndex::EpochBasedRangeIndex(LineairDB::EpochFramework& e)
+LockBasedIndex::LockBasedIndex(LineairDB::EpochFramework& e)
     : RangeIndexBase(e),
       indexed_epoch_(0),
       manager_stop_flag_(false),
@@ -87,12 +87,12 @@ EpochBasedRangeIndex::EpochBasedRangeIndex(LineairDB::EpochFramework& e)
           }
         }
       }){};
-EpochBasedRangeIndex::~EpochBasedRangeIndex() {
+LockBasedIndex::~LockBasedIndex() {
   manager_stop_flag_.store(true);
   manager_.join();
 };
 
-std::optional<size_t> EpochBasedRangeIndex::Scan(
+std::optional<size_t> LockBasedIndex::Scan(
     const std::string_view b, const std::string_view e,
     std::function<bool(std::string_view)> operation) {
   size_t hit       = 0;
@@ -121,7 +121,7 @@ std::optional<size_t> EpochBasedRangeIndex::Scan(
 
   return hit;
 };
-bool EpochBasedRangeIndex::Insert(const std::string_view key) {
+bool LockBasedIndex::Insert(const std::string_view key) {
   std::lock_guard<decltype(lock_)> guard(lock_);
   if (IsInPredicateSet(key)) { return false; }
 
@@ -132,7 +132,7 @@ bool EpochBasedRangeIndex::Insert(const std::string_view key) {
   return true;
 };
 
-bool EpochBasedRangeIndex::Delete(const std::string_view key) {
+bool LockBasedIndex::Delete(const std::string_view key) {
   std::lock_guard<decltype(lock_)> guard(lock_);
   if (IsInPredicateSet(key)) { return false; }
   const auto epoch = epoch_manager_ref_.GetMyThreadLocalEpoch();
@@ -142,15 +142,15 @@ bool EpochBasedRangeIndex::Delete(const std::string_view key) {
   return true;
 };
 
-bool EpochBasedRangeIndex::IsInPredicateSet(const std::string_view key) {
+bool LockBasedIndex::IsInPredicateSet(const std::string_view key) {
   for (auto it = predicate_list_.begin(); it != predicate_list_.end(); it++) {
     if (it->begin <= key && key <= it->end) return true;
   }
   return false;
 }
 
-bool EpochBasedRangeIndex::IsOverlapWithInsertOrDelete(
-    const std::string_view begin, const std::string_view end) {
+bool LockBasedIndex::IsOverlapWithInsertOrDelete(const std::string_view begin,
+                                                 const std::string_view end) {
   for (auto it = insert_or_delete_key_set_.begin();
        it != insert_or_delete_key_set_.end(); it++) {
     if (begin <= it->key && it->key <= end) return true;

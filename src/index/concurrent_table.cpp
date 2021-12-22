@@ -20,7 +20,7 @@
 
 #include "lineairdb/config.h"
 #include "point_index/impl/mpmc_concurrent_set_impl.h"
-#include "range_index/impl/epoch_based_range_index.h"
+#include "range_index/impl/lock_based_index.h"
 #include "types/data_item.hpp"
 #include "types/definitions.h"
 
@@ -39,11 +39,14 @@ ConcurrentTable::ConcurrentTable(EpochFramework& epoch_framework, Config config,
       break;
   }
   switch (config.range_index) {
-    case Config::RangeIndex::EpochROWEX:
-      range_index_ = std::make_unique<EpochBasedRangeIndex>(epoch_manager_ref_);
+    case Config::RangeIndex::LockBasedIndex:
+      range_index_ = std::make_unique<LockBasedIndex>(epoch_manager_ref_);
+      break;
+    case Config::RangeIndex::EpochBasedRCU:
+      // range_index_ = std::make_unique<EpochBasedRCU>(epoch_manager_ref_);
       break;
     default:
-      range_index_ = std::make_unique<EpochBasedRangeIndex>(epoch_manager_ref_);
+      range_index_ = std::make_unique<LockBasedIndex>(epoch_manager_ref_);
       break;
   }
   if (recovery_set.empty()) return;

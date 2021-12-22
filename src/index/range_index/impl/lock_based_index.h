@@ -35,31 +35,17 @@ namespace Index {
 
 /**
  * @brief
- * Single-Producer Multiple-Consumer (SPMC) Read-Optimized Write-EXclusive
- * (ROWREX) Index.
- * There exists a special thread generates the index periodically (per epoch).
- * Other worker threads fetch the generated index and use it simultaneously
- * without locking. All update operations (such as Insert/Delete) are grouped
- * by each epoch and updated as a batch by the special thread.
- * We named it Epoch-based ROWEX.
- * This data structure has small overhead on read (optimized) and is be
- * exclusive on write by a special thread.
+ * Lock-based Index.
  * @note
  * To deal with the phantom anomaly, all the key sets of reads (scan) and
  * writes (insert/delete) that occurred in an epoch are recorded in the shared
  * data structure. If a transaction detects a conflict, it is immediately
- * aborted. Since neither update->scan nor scan->update can track by concurrency
- * control protocols in LineairDB, so we cannot deny the possibility that these
- * edges may become the `last path` of a dependency cycle and result in the
- * correctness failure.
- * @todo Introduce and implement some concurrent data structure. The current
- * mutex-guarded implementation is very conservative and primitive, and suffers
- * from performance.
+ * aborted.
  */
-class EpochBasedRangeIndex final : public RangeIndexBase {
+class LockBasedIndex final : public RangeIndexBase {
  public:
-  EpochBasedRangeIndex(LineairDB::EpochFramework&);
-  ~EpochBasedRangeIndex() final override;
+  LockBasedIndex(LineairDB::EpochFramework&);
+  ~LockBasedIndex() final override;
   std::optional<size_t> Scan(
       const std::string_view begin, const std::string_view end,
       std::function<bool(std::string_view)> operation) final override;
@@ -88,13 +74,13 @@ class EpochBasedRangeIndex final : public RangeIndexBase {
     EpochNumber updated_at;
   };
 
-  using PredicateList            = std::vector<Predicate>;
-  using InsertOrDeleteKeySet     = std::vector<InsertOrDeleteEvent>;
-  using ROWEXRangeIndexContainer = std::map<std::string, IndexItem>;
+  using PredicateList        = std::vector<Predicate>;
+  using InsertOrDeleteKeySet = std::vector<InsertOrDeleteEvent>;
+  using RangeIndexContainer  = std::map<std::string, IndexItem>;
 
   PredicateList predicate_list_;
   InsertOrDeleteKeySet insert_or_delete_key_set_;
-  ROWEXRangeIndexContainer container_;
+  RangeIndexContainer container_;
 
   // TODO WANTFIX for performance: use a concurrent data strucuture to
   // manipulate these sets efficiently

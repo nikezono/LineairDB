@@ -163,7 +163,9 @@ int main(int argc, char** argv) {
     epoch_framework.Start();
     LineairDB::Config config;
     if (structure == "LockBasedIndex") {
-      config.range_index = decltype(config)::RangeIndex::EpochROWEX;
+      config.range_index = decltype(config)::RangeIndex::LockBasedIndex;
+    } else if (structure == "EpochBasedRCU") {
+      config.range_index = decltype(config)::RangeIndex::EpochBasedRCU;
     } else {
       std::cout << "invalid structure name." << std::endl
                 << options.help() << std::endl;
