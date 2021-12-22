@@ -14,8 +14,8 @@
  *   limitations under the License.
  */
 
-#ifndef LINEAIRDB_INDEX_LOCK_BASED_INDEX_H
-#define LINEAIRDB_INDEX_LOCK_BASED_INDEX_H
+#ifndef LINEAIRDB_INDEX_EPOCH_BASED_RCU_H
+#define LINEAIRDB_INDEX_EPOCH_BASED_RCU_H
 
 #include <atomic>
 #include <cassert>
@@ -35,12 +35,12 @@ namespace Index {
 
 /**
  * @brief
- * Lock-based Index.
+ * Epoch-based RCU Index.
  */
-class LockBasedIndex final : public RangeIndexBase {
+class EpochBasedRCU final : public RangeIndexBase {
  public:
-  LockBasedIndex(LineairDB::EpochFramework&);
-  ~LockBasedIndex() final override;
+  EpochBasedRCU(LineairDB::EpochFramework&);
+  ~EpochBasedRCU() final override;
   std::optional<size_t> Scan(
       const std::string_view begin, const std::string_view end,
       std::function<bool(std::string_view)> operation) final override;
@@ -88,4 +88,4 @@ class LockBasedIndex final : public RangeIndexBase {
 }  // namespace Index
 }  // namespace LineairDB
 
-#endif /*  LINEAIRDB_INDEX_LOCK_BASED_INDEX_H*/
+#endif /*  LINEAIRDB_INDEX_EPOCH_BASED_RCU_H*/

@@ -23,63 +23,70 @@
 #include "util/epoch_framework.hpp"
 #include "util/logger.hpp"
 
-TEST(ConcurrentTableTest, Instantiate) {
+TEST(ConcurrentTableInitialTest, Instantiate) {
   LineairDB::EpochFramework epoch;
   epoch.Start();
   ASSERT_NO_THROW(LineairDB::Index::ConcurrentTable table(epoch));
 }
 
-TEST(ConcurrentTableTest, Put) {
+class ConcurrentTableTest
+    : public ::testing::TestWithParam<LineairDB::Config::RangeIndex> {
+  virtual void SetUp() {
+    epoch.Start();
+    table = new LineairDB::Index::ConcurrentTable(epoch);
+  }
+  virtual void TearDown() {
+    epoch.Stop();
+    delete table;
+  }
+
+ protected:
   LineairDB::EpochFramework epoch;
-  epoch.Start();
-  LineairDB::Index::ConcurrentTable table(epoch);
-  table.Put("alice", LineairDB::DataItem{});
+  LineairDB::Index::ConcurrentTable* table;
+};
+
+const std::array<std::string, 2> Impls{"LockBasedIndex", "EpochBasedRCU"};
+INSTANTIATE_TEST_CASE_P(
+    LineairDB, ConcurrentTableTest,
+    ::testing::Values(LineairDB::Config::RangeIndex::LockBasedIndex,
+                      LineairDB::Config::RangeIndex::EpochBasedRCU),
+    [](const testing::TestParamInfo<LineairDB::Config::RangeIndex>& param) {
+      return Impls[param.index];
+    });
+
+TEST_P(ConcurrentTableTest, Put) { table->Put("alice", LineairDB::DataItem{}); }
+
+TEST_P(ConcurrentTableTest, Get) {
+  ASSERT_EQ(nullptr, table->Get("alice"));
+  table->Put("alice", {});
+  ASSERT_NE(nullptr, table->Get("alice"));
 }
 
-TEST(ConcurrentTableTest, Get) {
-  LineairDB::EpochFramework epoch;
-  epoch.Start();
-  LineairDB::Index::ConcurrentTable table(epoch);
-  ASSERT_EQ(nullptr, table.Get("alice"));
-  table.Put("alice", {});
-  ASSERT_NE(nullptr, table.Get("alice"));
+TEST_P(ConcurrentTableTest, GetOrInsert) {
+  ASSERT_NE(nullptr, table->GetOrInsert("alice"));
 }
 
-TEST(ConcurrentTableTest, GetOrInsert) {
-  LineairDB::EpochFramework epoch;
-  epoch.Start();
-  LineairDB::Index::ConcurrentTable table(epoch);
-  ASSERT_NE(nullptr, table.GetOrInsert("alice"));
-}
-
-TEST(ConcurrentTableTest, ConcurrentInserting) {
+TEST_P(ConcurrentTableTest, ConcurrentInserting) {
   std::vector<std::thread> threads;
-  LineairDB::EpochFramework epoch;
-  epoch.Start();
-  LineairDB::Index::ConcurrentTable table(epoch);
-
   for (size_t i = 0; i < 10; i++) {
-    threads.emplace_back([&, i]() { table.Put(std::to_string(i), {}); });
+    threads.emplace_back([&, i]() { table->Put(std::to_string(i), {}); });
   }
   for (auto& thread : threads) { thread.join(); }
   for (size_t i = 0; i < 10; i++) {
-    ASSERT_NE(nullptr, table.Get(std::to_string(i)));
+    ASSERT_NE(nullptr, table->Get(std::to_string(i)));
   }
 }
 
-TEST(ConcurrentTableTest, ConcurrentAndConflictedInserting) {
+TEST_P(ConcurrentTableTest, ConcurrentAndConflictedInserting) {
   std::vector<std::thread> threads;
   std::vector<LineairDB::DataItem> items(10);
-  LineairDB::EpochFramework epoch;
-  epoch.Start();
-  LineairDB::Index::ConcurrentTable table(epoch);
 
   for (size_t i = 0; i < 10; i++) {
-    threads.emplace_back([&]() { table.Put("alice", {}); });
+    threads.emplace_back([&]() { table->Put("alice", {}); });
   }
   for (auto& thread : threads) { thread.join(); }
   bool some_item_were_inserted = false;
-  auto* item                   = table.Get("alice");
+  auto* item                   = table->Get("alice");
   for (size_t i = 0; i < 10; i++) {
     if (item != nullptr) some_item_were_inserted = true;
   }
@@ -87,14 +94,10 @@ TEST(ConcurrentTableTest, ConcurrentAndConflictedInserting) {
   ASSERT_TRUE(some_item_were_inserted);
 }
 
-TEST(ConcurrentTableTest, Scan) {
-  LineairDB::Util::SetUpSPDLog();
-  LineairDB::EpochFramework epoch;
-  epoch.Start();
-  LineairDB::Index::ConcurrentTable table(epoch);
-  ASSERT_TRUE(table.Put("alice", {}));
-  ASSERT_TRUE(table.Put("bob", {}));
-  ASSERT_TRUE(table.Put("carol", {}));
+TEST_P(ConcurrentTableTest, Scan) {
+  ASSERT_TRUE(table->Put("alice", {}));
+  ASSERT_TRUE(table->Put("bob", {}));
+  ASSERT_TRUE(table->Put("carol", {}));
 
   auto count = table.Scan("alice", "carol", [](auto) { return false; });
   if (count.has_value()) { ASSERT_EQ(3, count.value()); }
@@ -108,39 +111,33 @@ TEST(ConcurrentTableTest, Scan) {
   if (count_canceled.has_value()) { ASSERT_EQ(1, count_canceled.value()); }
 }
 
-TEST(ConcurrentTableTest, TremendousPut) {
+TEST_P(ConcurrentTableTest, TremendousPut) {
   std::vector<std::thread> threads;
   std::vector<LineairDB::DataItem*> items;
-  LineairDB::EpochFramework epoch;
-  epoch.Start();
-  LineairDB::Index::ConcurrentTable table(epoch);
 
   constexpr size_t working_set_size = 8192;
   for (size_t i = 0; i < 10; i++) {
     threads.emplace_back([&, i]() {
       for (size_t j = i * working_set_size; j < (i + 1) * working_set_size;
            j++) {
-        table.Put(std::to_string(j), {});
+        table->Put(std::to_string(j), {});
       }
     });
   }
   for (auto& thread : threads) { thread.join(); }
 }
 
-TEST(ConcurrentTableTest, TremendousGetAndPut) {
+TEST_P(ConcurrentTableTest, TremendousGetAndPut) {
   std::vector<std::thread> threads;
   std::vector<LineairDB::DataItem*> items;
-  LineairDB::EpochFramework epoch;
-  epoch.Start();
-  LineairDB::Index::ConcurrentTable table(epoch);
 
   constexpr size_t working_set_size = 8192;
   for (size_t i = 0; i < 10; i++) {
     threads.emplace_back([&, i]() {
       for (size_t j = i * working_set_size; j < (i + 1) * working_set_size;
            j++) {
-        table.Get(std::to_string(j - working_set_size));
-        table.Put(std::to_string(j), {});
+        table->Get(std::to_string(j - working_set_size));
+        table->Put(std::to_string(j), {});
       }
     });
   }
