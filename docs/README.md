@@ -57,6 +57,15 @@ Because unnecessary write operations are omitted, LineairDB improves the process
 
 The correctness of transaction processing in LineairDB is proved based on the multi-version serializability theory. See the research paper [at this link](https://arxiv.org/abs/1904.08119).
 
+## Index Decomposition
+TODO
+NWR ensures strict serializability for point operations.
+However we must ensure serializability for predicate (range) queries.
+Phantom anomaly is....
+To deal with the phantom anomaly, LineairDB decompose point/range indices...
+...
+all the key sets of reads (scan) and writes (insert/delete) that occurred in an epoch are recorded in the shared data structure. If a transaction detects a conflict, it is immediately aborted.
+
 # Example
 
 The following is a simple example code of how to use LineairDB.

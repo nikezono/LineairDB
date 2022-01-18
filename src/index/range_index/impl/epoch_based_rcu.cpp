@@ -44,7 +44,6 @@ EpochBasedRCU::EpochBasedRCU(LineairDB::EpochFramework& e)
           indexed_epoch_ = global;
 
           {
-            std::lock_guard<decltype(lock_)> guard(lock_);
             {
               // Clear predicate list
               auto it = remove_if(predicate_list_.begin(),
@@ -77,7 +76,7 @@ EpochBasedRCU::EpochBasedRCU(LineairDB::EpochFramework& e)
                     auto& entry      = container_.at(it->key);
                     entry.is_deleted = false;
                   }
-                  container_.emplace(it->key, IndexItem{false, it->epoch});
+                  container_.emplace(it->key, IndexItem{false});
                 }
               }
 
@@ -100,9 +99,6 @@ std::optional<size_t> EpochBasedRCU::Scan(
   const auto end   = std::string(e);
   if (end < begin) return std::nullopt;
 
-  // TODO: we can optimize to avoid locking for read-only transactions.
-  std::lock_guard<decltype(lock_)> guard(lock_);
-
   if (IsOverlapWithInsertOrDelete(b, e)) { return std::nullopt; }
 
   {
@@ -122,7 +118,6 @@ std::optional<size_t> EpochBasedRCU::Scan(
   return hit;
 };
 bool EpochBasedRCU::Insert(const std::string_view key) {
-  std::lock_guard<decltype(lock_)> guard(lock_);
   if (IsInPredicateSet(key)) { return false; }
   // NOTE:
   // The global epoch read here may be larger than the epoch of the transaction
@@ -137,7 +132,6 @@ bool EpochBasedRCU::Insert(const std::string_view key) {
 };
 
 bool EpochBasedRCU::Delete(const std::string_view key) {
-  std::lock_guard<decltype(lock_)> guard(lock_);
   if (IsInPredicateSet(key)) { return false; }
   // NOTE:
   // The global epoch read here may be larger than the epoch of the transaction

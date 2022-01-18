@@ -15,9 +15,3 @@ In other words, LineairDB::Database::ExecuteTransaction is lock-free but is not 
 It is no worse in terms of cache efficiency, but it is better to forbid that a commit does not come back (eventually) forever.
 
 #### Support CLI.
-
-### Next Release
-
-- Checkpointing
-- Additional concurrency control protocols (MVTO, MVTO+NWR)
-- TPC-C benchmark

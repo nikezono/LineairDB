@@ -66,7 +66,6 @@ class EpochBasedRCU final : public RangeIndexBase {
 
   struct IndexItem {
     bool is_deleted;
-    EpochNumber updated_at;
   };
 
   using PredicateList        = std::vector<Predicate>;
@@ -76,10 +75,6 @@ class EpochBasedRCU final : public RangeIndexBase {
   PredicateList predicate_list_;
   InsertOrDeleteKeySet insert_or_delete_key_set_;
   RangeIndexContainer container_;
-
-  // TODO WANTFIX for performance: use a concurrent data strucuture to
-  // manipulate these sets efficiently
-  std::recursive_mutex lock_;
 
   size_t indexed_epoch_;
   std::atomic<bool> manager_stop_flag_;

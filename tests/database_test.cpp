@@ -117,7 +117,7 @@ TEST_F(DatabaseTest, Scan) {
        }});
 }
 
-TEST_F(DatabaseTest, ScanWithPhantomAvoidance) {
+TEST_F(DatabaseTest, RepeatableRead) {
   int alice = 1;
   int bob   = 2;
   int carol = 3;
