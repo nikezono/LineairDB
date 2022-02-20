@@ -29,6 +29,7 @@
 #include "index/range_index/range_index_base.h"
 #include "types/definitions.h"
 #include "util/epoch_framework.hpp"
+#include "util/lock_free_list.hpp"
 
 namespace LineairDB {
 namespace Index {
@@ -36,6 +37,10 @@ namespace Index {
 /**
  * @brief
  * Epoch-based RCU Index.
+ * This index provides a phantom-free ordered index with Precision Locking[1] technique.
+ *
+ * @note
+ * [1]:https://dl.acm.org/doi/pdf/10.1145/582318.582340
  */
 class EpochBasedRCU final : public RangeIndexBase {
  public:
@@ -55,28 +60,37 @@ class EpochBasedRCU final : public RangeIndexBase {
   struct Predicate {
     std::string begin;
     std::string end;
+  };
+  struct PredicatesOfEpoch {
     EpochNumber epoch;
+    Util::LockFreeSinglyLinkedList<Predicate>;
   };
 
   struct InsertOrDeleteEvent {
     std::string key;
     bool is_delete_event;
+  };
+  struct InsOrDelsOfEpoch {
     EpochNumber epoch;
+    Util::LockFreeSinglyLinkedList<InsertOrDeleteEvent>;
   };
 
   struct IndexItem {
-    bool is_deleted;
+    std::string key;
   };
 
-  using PredicateList        = std::vector<Predicate>;
-  using InsertOrDeleteKeySet = std::vector<InsertOrDeleteEvent>;
-  using RangeIndexContainer  = std::map<std::string, IndexItem>;
+  struct RangeIndexContainer {
+    EpochNumber indexed_epoch;
+    std::vector<std::string> keys;
+  };
+
+  using PredicateList = Util::LockFreeSinglyLinkedList<PredicatesOfEpoch>;
+  using InsertOrDeleteKeySet = Util::LockFreeSinglyLinkedList<InsOrDelsOfEpoch>;
 
   PredicateList predicate_list_;
   InsertOrDeleteKeySet insert_or_delete_key_set_;
-  RangeIndexContainer container_;
+  std::atomic<RangeIndexContainer*> container_;
 
-  size_t indexed_epoch_;
   std::atomic<bool> manager_stop_flag_;
   std::thread manager_;
 };

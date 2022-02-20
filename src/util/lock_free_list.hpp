@@ -23,7 +23,6 @@
 #include <mutex>
 #include <optional>
 
-
 namespace LineairDB {
 namespace Util {
 
@@ -38,6 +37,9 @@ class LockFreeSinglyLinkedList {
 
  public:
   LockFreeSinglyLinkedList() : head_(nullptr) {}
+  ~LockFreeSinglyLinkedList() {
+    ThreadUnsafeDelete([]() { return true; })
+  }
   void AddToHead(const T& entry) {
     auto* new_entry = new Node(entry, nullptr);
     for (;;) {
@@ -62,9 +64,7 @@ class LockFreeSinglyLinkedList {
     auto* prev                   = head;
     decltype(curr) delete_target = nullptr;
     while (curr != nullptr) {
-
       if (deleter(curr->entry)) {
-
         if (curr == head) {
           head_.store(nullptr);
           delete_target = curr;

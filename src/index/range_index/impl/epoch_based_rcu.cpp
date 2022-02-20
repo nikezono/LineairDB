@@ -32,58 +32,41 @@ namespace Index {
 
 EpochBasedRCU::EpochBasedRCU(LineairDB::EpochFramework& e)
     : RangeIndexBase(e),
-      indexed_epoch_(0),
       manager_stop_flag_(false),
       manager_([&]() {
         while (manager_stop_flag_.load() != true) {
+          epoch_manager_ref_.Sync();
           const auto global = epoch_manager_ref_.GetGlobalEpoch();
-          if (indexed_epoch_ == global) {
-            std::this_thread::yield();
-            continue;
+          const auto stable_epoch = global-2llu;
+
+          /**
+           * The manager thread works the following jobs:
+           * 1. update ordered index
+           * 2. use free() to unnecessary entries (predicates/inserts/deletes) that belong to old epochs
+           * **/
+
+          // 1. update ordered index
+          auto* new_container = new RangeIndexContainer();
+          auto* old = container_.load();
+          new_container->keys = old->keys;
+
+          bool work_done = false;
+          while (!work_done){
+            auto ins_or_dels = insert_or_delete_key_set_.Get([stable_epoch](const auto& list){
+              return list.epoch < 
+              
+
+            });
           }
-          indexed_epoch_ = global;
 
-          {
-            {
-              // Clear predicate list
-              auto it = remove_if(predicate_list_.begin(),
-                                  predicate_list_.end(), [&](const auto& pred) {
-                                    const auto del = 2 <= global - pred.epoch;
-                                    return del;
-                                  });
-              predicate_list_.erase(it, predicate_list_.end());
-            }
-            {
-              // Clear insert_or_delete_keys
-              auto it = remove_if(insert_or_delete_key_set_.begin(),
-                                  insert_or_delete_key_set_.end(),
-                                  [&](const auto& pred) {
-                                    const auto del = 2 <= global - pred.epoch;
-                                    return del;
-                                  });
+        
 
-              // Before deleting the set of insert_or_delete_keys, we update the
-              // index container to contain such outdated (already committed)
-              // insertions and deletions.
-              auto outdated_start = it;
+          
+          
+          
 
-              for (; it != insert_or_delete_key_set_.end(); it++) {
-                if (it->is_delete_event) {
-                  assert(0 < container_.count(it->key));
-                  container_.at(it->key).is_deleted = true;
-                } else {
-                  if (0 < container_.count(it->key)) {
-                    auto& entry      = container_.at(it->key);
-                    entry.is_deleted = false;
-                  }
-                  container_.emplace(it->key, IndexItem{false});
-                }
-              }
+          // 2. garbage collection
 
-              insert_or_delete_key_set_.erase(outdated_start,
-                                              insert_or_delete_key_set_.end());
-            }
-          }
         }
       }){};
 EpochBasedRCU::~EpochBasedRCU() {

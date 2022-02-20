@@ -77,8 +77,6 @@ class LockBasedIndex final : public RangeIndexBase {
   InsertOrDeleteKeySet insert_or_delete_key_set_;
   RangeIndexContainer container_;
 
-  // TODO WANTFIX for performance: use a concurrent data strucuture to
-  // manipulate these sets efficiently
   std::recursive_mutex lock_;
 
   size_t indexed_epoch_;

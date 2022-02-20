@@ -20,10 +20,19 @@ macro(register_test testfile testfilepath)
   target_include_directories(${testfile} PRIVATE
     ${Boost_INCLUDE_DIRS}
     $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src>
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
     $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/third_party/concurrentqueue>
     $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/third_party/spdlog/include>
     $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/third_party/msgpack/include>
   )
+
+
+get_property(dirs DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY INCLUDE_DIRECTORIES)
+foreach(dir ${dirs})
+  message(STATUS "dir='${dir}'")
+endforeach()
+
+
   add_test(
     NAME ${testfile}
     COMMAND ${CMAKE_CURRENT_BINARY_DIR}/${testfile})

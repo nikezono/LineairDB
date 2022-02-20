@@ -64,7 +64,7 @@ TEST(LockFreeListTest, Get) {
     ASSERT_EQ(*result.value(), v3);
   }
 }
-TEST(LockFreeListTest, Delete) {
+TEST(LockFreeListTest, ThreadUnsafeDelete) {
   auto value = 42;
   LockFreeSinglyLinkedList<decltype(value)> list;
   list.AddToHead(value - 1);
