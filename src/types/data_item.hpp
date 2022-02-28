@@ -21,6 +21,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstring>
+#include <functional>
 #include <msgpack.hpp>
 #include <string>
 #include <type_traits>
@@ -109,7 +110,8 @@ struct DataItem {
 
   decltype(readers_writers_lock)& GetRWLockRef() {
     return readers_writers_lock;
-  };
+  }
 };
 }  // namespace LineairDB
+
 #endif /* LINEAIRDB_DATA_ITEM_HPP */

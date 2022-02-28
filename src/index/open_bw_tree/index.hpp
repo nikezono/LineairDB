@@ -22,56 +22,113 @@
 #include <optional>
 #include <string_view>
 
-#include "index/index_base.hpp"
 #include "bwtree.h"
+#include "index/index_base.hpp"
 
 namespace LineairDB {
-
 namespace Index {
 
 template <typename T>
 class OpenBwTreeIndex final : public IndexBase<T> {
  public:
-  OpenBwTreeIndex() {}
+  OpenBwTreeIndex() : maximum(std::thread::hardware_concurrency() * 3) {
+    // TODO FIXME we cannot know the number of threads that accesses this index
+    // since LineairDB allows client-threads to manipulate database directly.
+    // Therefore, if a user spawn threads more than the `maximum`, it will causes the SIGABRT of OpenBwTree;
+    bwtree_.UpdateThreadLocal(maximum);
+    PreHook();
+  }
 
-  T* Get(const std::string_view key) override final { return nullptr; }
+  T* Get(const std::string_view key) override final {
+    PreHook();
+    const auto k   = std::string(key);
+    auto value_set = bwtree_.GetValue(k);
+    if (value_set.empty()) return nullptr;
+    assert(value_set.size() == 1);
+    return *value_set.begin();
+  }
 
   /**
    * @note return false if a phantom anomaly has detected.
    */
   bool Put(const std::string_view key, const T& rhs) override final {
-    return true;
+    PreHook();
+    const auto k      = std::string(key);
+    auto* new_item    = new DataItem(rhs);
+    const auto result = bwtree_.Insert(k, new_item);
+    if (!result) { delete new_item; }
+    return result;
   }
 
   bool Put(const std::string_view key, T&& rhs) override final {
+    PreHook();
     return Put(key, rhs);
   }
 
-  void ForcePutBlankEntry(const std::string_view key) override final {}
+  void ForcePutBlankEntry(const std::string_view key) override final {
+    PreHook();
+    Put(key, DataItem{});
+  }
+
+  std::optional<size_t> Scan(
+      const std::string_view begin, const std::string_view end,
+      std::function<bool(std::string_view)> operation) override final {
+    PreHook();
+    const auto b = std::string(begin);
+    const auto e = std::string(end);
+    size_t hit   = 0;
+    auto it      = bwtree_.Begin(b);
+    for (;;) {
+      if (it.IsEnd() == false && b <= it->first && it->first < e) {
+        hit++;
+        auto cancel = operation(it->first);
+        if (cancel) break;
+        it++;
+      } else {
+        break;
+      }
+    }
+    return hit;
+  }
 
   std::optional<size_t> Scan(
       const std::string_view begin, const std::string_view end,
       std::function<bool(std::string_view, T&)> operation) override final {
+    PreHook();
     return Scan(begin, end, [&](std::string_view key) {
-      auto* value = Get(key);
+      const auto k = std::string(key);
+      auto* value  = Get(k);
       return operation(key, *value);
     });
   }
 
-  /**
-   * @brief Scan without values; that is, an interface to collect only keys from
-   * range index.
-   */
-  std::optional<size_t> Scan(
-      const std::string_view begin, const std::string_view end,
-      std::function<bool(std::string_view)> operation) override final {
-    return 0;
+  void ForEach(std::function<bool(std::string_view, T&)> f) override final {
+    PreHook();
+    auto it = bwtree_.Begin();
+    while (!it.IsEnd()) {
+      const auto key = it->first;
+      auto value     = Get(key);
+      f(key, *value);
+    }
   }
 
-  void ForEach(std::function<bool(std::string_view, T&)> f) override final {}
+  void PreHook() {
+    auto thread_id = wangziqi2013::bwtree::BwTreeBase::gc_id;
+    if (thread_id == -1) {
+      auto now = NumThreads.fetch_add(1);
+      assert(now < maximum);
+      bwtree_.RegisterThread();
+    }
+  }
 
  private:
+  wangziqi2013::bwtree::BwTree<std::string, DataItem*> bwtree_;
+  size_t maximum;
+  static std::atomic<size_t> NumThreads;
 };
+
+template <typename T>
+std::atomic<size_t> OpenBwTreeIndex<T>::NumThreads = 0;
 
 }  // namespace Index
 
