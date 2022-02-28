@@ -18,6 +18,7 @@
 
 #include <functional>
 
+#include "index/open_bw_tree/index.hpp"
 #include "index/precision_locking_index/index.hpp"
 #include "lineairdb/config.h"
 #include "types/data_item.hpp"
@@ -34,9 +35,9 @@ ConcurrentTable::ConcurrentTable(EpochFramework& epoch_framework, Config config,
       index_ = std::make_unique<HashTableWithPrecisionLockingIndex<DataItem>>(
           epoch_manager_ref_);
       break;
+    case Config::IndexStructure::OpenBwTree:
     default:
-      index_ = std::make_unique<HashTableWithPrecisionLockingIndex<DataItem>>(
-          epoch_manager_ref_);
+      index_ = std::make_unique<OpenBwTreeIndex<DataItem>>();
       break;
   }
 

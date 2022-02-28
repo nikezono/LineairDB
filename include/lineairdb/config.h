@@ -74,7 +74,7 @@ struct Config {
    */
   Logger logger = ThreadLocalLogger;
 
-  enum IndexStructure { HashTableWithPrecisionLockingIndex };
+  enum IndexStructure { HashTableWithPrecisionLockingIndex, OpenBwTree };
   /**
    * @brief
    * Set the type of index.

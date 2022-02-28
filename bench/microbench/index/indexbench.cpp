@@ -98,9 +98,8 @@ std::pair<size_t, size_t> Benchmark(T& index,
             end.clear();
           }
 
-          auto result = index.Scan(begin, end, [&](auto, auto) {
-            return false;
-          });
+          auto result =
+              index.Scan(begin, end, [&](auto, auto) { return false; });
 
           if (result.has_value()) {
             operation_succeed++;
@@ -189,7 +188,10 @@ int main(int argc, char** argv) {
     epoch_framework.Start();
     LineairDB::Config config;
     if (structure == "PrecisionLocking") {
-      config.index_structure = decltype(config)::IndexStructure::HashTableWithPrecisionLockingIndex;
+      config.index_structure =
+          decltype(config)::IndexStructure::HashTableWithPrecisionLockingIndex;
+    } else if (structure == "OpenBwTree") {
+      config.index_structure = decltype(config)::IndexStructure::OpenBwTree;
     } else {
       std::cout << "invalid structure name." << std::endl
                 << options.help() << std::endl;

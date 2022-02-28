@@ -54,7 +54,8 @@ endif()
 
 ### Build as library
 file(GLOB_RECURSE SOURCES "src/*.cpp")
-add_library(${PROJECT_NAME} ${SOURCES})
+set(THIRD_PARTY_OBJECTS third_party/OpenBwTree/src/bwtree.cpp)
+add_library(${PROJECT_NAME} ${SOURCES} ${THIRD_PARTY_OBJECTS})
 add_library(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
 
 find_package(Boost REQUIRED)
@@ -97,6 +98,7 @@ target_include_directories(${PROJECT_NAME} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party/concurrentqueue>
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include>
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party/msgpack/include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party/OpenBwTree/src>
 )
 
 ## Export as cmake library

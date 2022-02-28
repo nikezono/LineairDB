@@ -17,6 +17,3 @@
 	path = third_party/msgpack
 	url = https://github.com/msgpack/msgpack-c.git
 	branch = cpp_master
-[submodule "third_party/OpenBwTree"]
-	path = third_party/OpenBwTree
-	url = https://github.com/nikezono/BwTree.git

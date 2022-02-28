@@ -15,63 +15,40 @@
  *   limitations under the License.
  */
 
-#ifndef LINEAIRDB_INDEX_PRECISION_LOCKING_INDEX_INDEX_HPP
-#define LINEAIRDB_INDEX_PRECISION_LOCKING_INDEX_INDEX_HPP
+#ifndef LINEAIRDB_INDEX_OPEN_BWTREE_INDEX_HPP
+#define LINEAIRDB_INDEX_OPEN_BWTREE_INDEX_HPP
 
 #include <functional>
 #include <optional>
 #include <string_view>
 
 #include "index/index_base.hpp"
-#include "point_index/mpmc_concurrent_set_impl.hpp"
-#include "range_index/precision_locking.h"
+#include "bwtree.h"
 
 namespace LineairDB {
 
 namespace Index {
 
 template <typename T>
-class HashTableWithPrecisionLockingIndex final : public IndexBase<T> {
+class OpenBwTreeIndex final : public IndexBase<T> {
  public:
-  HashTableWithPrecisionLockingIndex(EpochFramework& e) : range_index_(e) {}
+  OpenBwTreeIndex() {}
 
-  T* Get(const std::string_view key) override final {
-    return point_index_.Get(key);
-  }
+  T* Get(const std::string_view key) override final { return nullptr; }
 
   /**
    * @note return false if a phantom anomaly has detected.
    */
   bool Put(const std::string_view key, const T& rhs) override final {
-    bool r_success = range_index_.Insert(key);
-    if (!r_success) return false;
-    auto* value    = new T(rhs);
-    bool p_success = point_index_.Put(key, value);
-    if (!p_success) delete value;
     return true;
   }
-  
+
   bool Put(const std::string_view key, T&& rhs) override final {
     return Put(key, rhs);
   }
 
-  void ForcePutBlankEntry(const std::string_view key) override final {
-    auto* new_entry = new T();
-    if (!point_index_.Put(key, new_entry))
-      delete new_entry;  // already inserted
-    range_index_.ForceInsert(key);
-  }
+  void ForcePutBlankEntry(const std::string_view key) override final {}
 
-  /**
-   * @brief Scan with key and values
-   *
-   * @param begin Starting point of the range. Matching entry is included.
-   * @param end Ending point of the range. Matching entry isn't included.
-   * @param operation This callback function will be invoked for every entry
-   * matching the range, The key/value pair will be given as an argument.
-   * @return std::optional<size_t> returns std::nullopt if a phantom anomaly has
-   * detected.
-   */
   std::optional<size_t> Scan(
       const std::string_view begin, const std::string_view end,
       std::function<bool(std::string_view, T&)> operation) override final {
@@ -88,20 +65,16 @@ class HashTableWithPrecisionLockingIndex final : public IndexBase<T> {
   std::optional<size_t> Scan(
       const std::string_view begin, const std::string_view end,
       std::function<bool(std::string_view)> operation) override final {
-    return range_index_.Scan(begin, end, operation);
+    return 0;
   }
 
-  void ForEach(std::function<bool(std::string_view, T&)> f) override final {
-    point_index_.ForEach(f);
-  }
+  void ForEach(std::function<bool(std::string_view, T&)> f) override final {}
 
  private:
-  MPMCConcurrentSetImpl<T> point_index_;
-  PrecisionLockingIndex range_index_;
 };
 
 }  // namespace Index
 
 }  // namespace LineairDB
 
-#endif /* LINEAIRDB_INDEX_PRECISION_LOCKING_INDEX_INDEX_HPP */
+#endif /* LINEAIRDB_INDEX_OPEN_BWTREE_INDEX_HPP */
