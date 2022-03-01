@@ -74,6 +74,15 @@ class OpenBwTreeIndex final : public IndexBase<T> {
       const std::string_view begin, const std::string_view end,
       std::function<bool(std::string_view)> operation) override final {
     PreHook();
+    return Scan(begin, end, [&](std::string_view key, T&) {
+      return operation(key);
+    });
+  }
+
+  std::optional<size_t> Scan(
+      const std::string_view begin, const std::string_view end,
+      std::function<bool(std::string_view, T&)> operation) override final {
+    PreHook();
     const auto b = std::string(begin);
     const auto e = std::string(end);
     size_t hit   = 0;
@@ -81,7 +90,7 @@ class OpenBwTreeIndex final : public IndexBase<T> {
     for (;;) {
       if (it.IsEnd() == false && b <= it->first && it->first < e) {
         hit++;
-        auto cancel = operation(it->first);
+        auto cancel = operation(it->first, *it->second);
         if (cancel) break;
         it++;
       } else {
@@ -89,17 +98,7 @@ class OpenBwTreeIndex final : public IndexBase<T> {
       }
     }
     return hit;
-  }
 
-  std::optional<size_t> Scan(
-      const std::string_view begin, const std::string_view end,
-      std::function<bool(std::string_view, T&)> operation) override final {
-    PreHook();
-    return Scan(begin, end, [&](std::string_view key) {
-      const auto k = std::string(key);
-      auto* value  = Get(k);
-      return operation(key, *value);
-    });
   }
 
   void ForEach(std::function<bool(std::string_view, T&)> f) override final {

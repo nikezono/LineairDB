@@ -18,6 +18,7 @@
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
 
+#include <chrono>
 #include <cxxopts.hpp>
 #include <experimental/filesystem>
 #include <fstream>
@@ -25,7 +26,6 @@
 #include <iostream>
 #include <random>
 #include <thread>
-#include <chrono>
 #include <variant>
 
 #include "index/concurrent_table.h"
@@ -104,7 +104,7 @@ std::pair<double, double> Benchmark(T& index, std::string structure,
 
           if (result.has_value()) {
             if (structure == "PrecisionLocking") {
-                operation_succeed++;
+              operation_succeed++;
             } else {
               std::this_thread::sleep_for(std::chrono::microseconds(1));
               auto result_after =
@@ -212,9 +212,11 @@ int main(int argc, char** argv) {
     }
 
     ConcurrentTable index(epoch_framework, config);
-    SPDLOG_INFO("IndexBench: index population starts.");
-    if (populated) Population<decltype(index)>(index);
-    SPDLOG_INFO("IndexBench: population has finished.");
+    if (populated) {
+      SPDLOG_INFO("IndexBench: index population starts.");
+      Population<decltype(index)>(index);
+      SPDLOG_INFO("IndexBench: population has finished.");
+    }
 
     auto res =
         Benchmark<decltype(index)>(index, structure, epoch_framework, threads,
