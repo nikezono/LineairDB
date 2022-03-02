@@ -39,10 +39,13 @@ const std::string CHARACTERS =
 constexpr auto PopulationSize = 100000;
 
 template <typename T>
-void Population(T& index) {
+void Population(T& index, LineairDB::EpochFramework&  epoch_f) {
+  epoch_f.MakeMeOnline();
   for (auto i = 0; i < PopulationSize; i++) {
     index.GetOrInsert(std::to_string(i));
   }
+  epoch_f.MakeMeOffline();
+  epoch_f.Sync();
 }
 
 template <typename T>
@@ -214,7 +217,7 @@ int main(int argc, char** argv) {
     ConcurrentTable index(epoch_framework, config);
     if (populated) {
       SPDLOG_INFO("IndexBench: index population starts.");
-      Population<decltype(index)>(index);
+      Population<decltype(index)>(index, epoch_framework);
       SPDLOG_INFO("IndexBench: population has finished.");
     }
 
