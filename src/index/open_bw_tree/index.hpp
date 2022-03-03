@@ -31,7 +31,7 @@ namespace Index {
 template <typename T>
 class OpenBwTreeIndex final : public IndexBase<T> {
  public:
-  OpenBwTreeIndex() : maximum(std::thread::hardware_concurrency() * 3) {
+  OpenBwTreeIndex() : maximum(150) {
     // TODO FIXME we cannot know the number of threads that accesses this index
     // since LineairDB allows client-threads to manipulate database directly.
     // Therefore, if a user spawn threads more than the `maximum`, it will causes the SIGABRT of OpenBwTree;
