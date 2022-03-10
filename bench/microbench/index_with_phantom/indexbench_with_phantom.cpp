@@ -213,10 +213,11 @@ int main(int argc, char** argv) {
   const auto structure            = result["structure"].as<std::string>();
 
   /** run benchmark **/
-  auto ops           = 0;
-  auto aps           = 0;
-  auto insert_aborts = 0;
-  auto scan_aborts   = 0;
+  double ops           = 0;
+  double aps           = 0;
+  double insert_aborts = 0;
+  double scan_aborts   = 0;
+  double abort_rate = 0;
 
   {
     using namespace LineairDB::Index;
@@ -249,11 +250,12 @@ int main(int argc, char** argv) {
     insert_aborts = res.insert_aborts;
     scan_aborts   = res.scan_aborts;
     aps           = insert_aborts + scan_aborts;
+    abort_rate = (aps / (ops + aps) * 100);
   }
   SPDLOG_INFO("IndexBench: measurement has finisihed.");
-  SPDLOG_INFO("Structure;CommitPS;InsertAbortsPS;ScanAbortsPS;AbortPS");
-  SPDLOG_INFO("{0};{1};{2};{3}", structure, ops, insert_aborts, scan_aborts,
-              aps);
+  SPDLOG_INFO("Structure;CommitPS;InsertAbortsPS;ScanAbortsPS;AbortRate");
+  SPDLOG_INFO("{0};{1};{2};{3};{4};{5}", structure, ops, insert_aborts, scan_aborts,
+              aps,abort_rate);
 
   /** Output result as json format **/
   rapidjson::Document result_json(rapidjson::kObjectType);
@@ -264,7 +266,8 @@ int main(int argc, char** argv) {
   result_json.AddMember("cps", ops, allocator);
   result_json.AddMember("aps", aps, allocator);
   result_json.AddMember("abort_insert_ps", insert_aborts, allocator);
-  result_json.AddMember("scan_insert_ps", scan_aborts, allocator);
+  result_json.AddMember("abort_scan_ps", scan_aborts, allocator);
+  result_json.AddMember("abort_rate", abort_rate, allocator);
 
   rapidjson::StringBuffer buffer;
   rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
