@@ -39,7 +39,7 @@ const std::string CHARACTERS =
 constexpr auto PopulationSize = 100000;
 
 template <typename T>
-void Population(T& index, LineairDB::EpochFramework&  epoch_f) {
+void Population(T& index, LineairDB::EpochFramework& epoch_f) {
   epoch_f.MakeMeOnline();
   for (auto i = 0; i < PopulationSize; i++) {
     index.GetOrInsert(std::to_string(i));
@@ -48,21 +48,29 @@ void Population(T& index, LineairDB::EpochFramework&  epoch_f) {
   epoch_f.Sync();
 }
 
+struct Result {
+  double cps           = 0;
+  double insert_aborts = 0;
+  double scan_aborts   = 0;
+};
+
 template <typename T>
-std::pair<double, double> Benchmark(T& index, std::string structure,
-                                    LineairDB::EpochFramework& epoch_f,
-                                    size_t threads, size_t proportion,
-                                    bool populated, size_t duration) {
+Result Benchmark(T& index, std::string benchmark_type, std::string structure,
+                 LineairDB::EpochFramework& epoch_f, size_t threads,
+                 size_t proportion, bool populated, size_t duration) {
   std::atomic<size_t> count_down_latch(0);
   std::atomic<bool> end_flag(false);
   std::atomic<size_t> total_succeed(0);
-  std::atomic<size_t> total_aborts(0);
+  std::atomic<size_t> total_scan_aborts(0);
+  std::atomic<size_t> total_insert_aborts(0);
   std::vector<std::future<void>> futures;
+  const auto is_scan_bench = benchmark_type == "scan";
 
   for (size_t i = 0; i < threads; i++) {
     futures.push_back(std::async(std::launch::async, [&]() {
-      size_t operation_succeed = 0;
-      size_t operation_aborts  = 0;
+      size_t operation_succeed       = 0;
+      size_t operation_scan_aborts   = 0;
+      size_t operation_insert_aborts = 0;
 
       std::random_device seed_gen;
       std::mt19937 engine(seed_gen());
@@ -75,14 +83,15 @@ std::pair<double, double> Benchmark(T& index, std::string structure,
       for (;;) {
         if (end_flag.load()) {
           total_succeed.fetch_add(operation_succeed);
-          total_aborts.fetch_add(operation_aborts);
+          total_scan_aborts.fetch_add(operation_scan_aborts);
+          total_insert_aborts.fetch_add(operation_insert_aborts);
           break;
         };
         epoch_f.MakeMeOnline();
 
         const bool is_scan_operation =
             static_cast<size_t>(dist(engine)) < proportion;
-        if (is_scan_operation) {
+        if (is_scan_bench && is_scan_operation) {
           std::string begin;
           std::string end;
 
@@ -116,11 +125,11 @@ std::pair<double, double> Benchmark(T& index, std::string structure,
                   result_after.value() == result.value()) {
                 operation_succeed++;
               } else {
-                operation_aborts++;
+                operation_scan_aborts++;
               }
             }
           } else {
-            operation_aborts++;
+            operation_scan_aborts++;
           }
 
         } else {
@@ -132,8 +141,12 @@ std::pair<double, double> Benchmark(T& index, std::string structure,
               key += CHARACTERS[random_string(engine)];
             }
           }
-          index.GetOrInsert(key);
-          operation_succeed++;
+          bool success = index.GetOrInsert(key);
+          if (success) {
+            operation_succeed++;
+          } else {
+            operation_insert_aborts++;
+          }
         }
         epoch_f.MakeMeOffline();
       }
@@ -154,9 +167,12 @@ std::pair<double, double> Benchmark(T& index, std::string structure,
       std::chrono::duration_cast<std::chrono::milliseconds>(end - begin)
           .count();
   auto success_ops = (double(total_succeed.load()) / duration_ns) * 1000;
-  auto aborts_ops  = (double(total_aborts.load()) / duration_ns) * 1000;
+  auto insert_aborts_ops =
+      (double(total_insert_aborts.load()) / duration_ns) * 1000;
+  auto scan_aborts_ops =
+      (double(total_scan_aborts.load()) / duration_ns) * 1000;
 
-  return std::make_pair(success_ops, aborts_ops);
+  return {success_ops, insert_aborts_ops, scan_aborts_ops};
 }
 
 int main(int argc, char** argv) {
@@ -168,6 +184,8 @@ int main(int argc, char** argv) {
       ("t,thread", "The number of worker threads",
        cxxopts::value<size_t>()->default_value(
            std::to_string(std::thread::hardware_concurrency())))  //
+      ("T,type", "Type of benchmark",
+       cxxopts::value<std::string>()->default_value("scan"))  //
       ("s,structure", "Index data structure",
        cxxopts::value<std::string>()->default_value("PrecisionLocking"))  //
       ("p,proportion", "Proportion of 'scan' operation",
@@ -188,14 +206,17 @@ int main(int argc, char** argv) {
   }
 
   const uint64_t threads          = result["thread"].as<size_t>();
+  const auto benchmark_type       = result["type"].as<std::string>();
   const auto measurement_duration = result["duration"].as<size_t>();
   const auto proportion           = result["proportion"].as<size_t>();
   const auto populated            = result["populated"].as<bool>();
   const auto structure            = result["structure"].as<std::string>();
 
   /** run benchmark **/
-  auto ops = 0;
-  auto aps = 0;
+  auto ops           = 0;
+  auto aps           = 0;
+  auto insert_aborts = 0;
+  auto scan_aborts   = 0;
 
   {
     using namespace LineairDB::Index;
@@ -221,15 +242,18 @@ int main(int argc, char** argv) {
       SPDLOG_INFO("IndexBench: population has finished.");
     }
 
-    auto res =
-        Benchmark<decltype(index)>(index, structure, epoch_framework, threads,
-                                   proportion, populated, measurement_duration);
-    ops = res.first;
-    aps = res.second;
+    auto res      = Benchmark<decltype(index)>(index, benchmark_type, structure,
+                                          epoch_framework, threads, proportion,
+                                          populated, measurement_duration);
+    ops           = res.cps;
+    insert_aborts = res.insert_aborts;
+    scan_aborts   = res.scan_aborts;
+    aps           = insert_aborts + scan_aborts;
   }
   SPDLOG_INFO("IndexBench: measurement has finisihed.");
-  SPDLOG_INFO("Structure;CommitPS;AbortPS;OPS");
-  SPDLOG_INFO("{0};{1};{2};{3}", structure, ops, aps, ops + aps);
+  SPDLOG_INFO("Structure;CommitPS;InsertAbortsPS;ScanAbortsPS;AbortPS");
+  SPDLOG_INFO("{0};{1};{2};{3}", structure, ops, insert_aborts, scan_aborts,
+              aps);
 
   /** Output result as json format **/
   rapidjson::Document result_json(rapidjson::kObjectType);
@@ -239,7 +263,8 @@ int main(int argc, char** argv) {
   result_json.AddMember("threads", threads, allocator);
   result_json.AddMember("cps", ops, allocator);
   result_json.AddMember("aps", aps, allocator);
-  result_json.AddMember("ops", ops + aps, allocator);
+  result_json.AddMember("abort_insert_ps", insert_aborts, allocator);
+  result_json.AddMember("scan_insert_ps", scan_aborts, allocator);
 
   rapidjson::StringBuffer buffer;
   rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
