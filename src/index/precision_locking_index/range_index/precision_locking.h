@@ -93,6 +93,7 @@ class PrecisionLockingIndex {
   InsertOrDeleteKeySet insert_or_delete_key_set_;
   std::shared_mutex ulock_;
   ROWEXRangeIndexContainer container_;
+  std::atomic<bool> something_inserted_;
   EpochFramework& epoch_manager_ref_;
   std::atomic<bool> manager_stop_flag_;
   std::thread manager_;

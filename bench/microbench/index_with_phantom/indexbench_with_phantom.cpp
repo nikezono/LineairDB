@@ -47,7 +47,6 @@ void Population(T& index, LineairDB::EpochFramework& epoch_f) {
   epoch_f.MakeMeOffline();
   epoch_f.Sync();
 }
-
 struct Result {
   double cps           = 0;
   double insert_aborts = 0;
@@ -89,16 +88,18 @@ Result Benchmark(T& index, std::string benchmark_type, std::string structure,
         };
         epoch_f.MakeMeOnline();
 
-        const bool is_scan_operation =
-            static_cast<size_t>(dist(engine)) < proportion;
+        const auto r                     = static_cast<size_t>(dist(engine));
+            const bool is_scan_operation = r < proportion;
         if (is_scan_bench && is_scan_operation) {
           std::string begin;
           std::string end;
 
           for (;;) {
             if (populated) {
-              begin = std::to_string(dist_for_populated(engine));
-              end   = std::to_string(dist_for_populated(engine));
+              auto b = dist_for_populated(engine);
+              begin  = std::to_string(b);
+              auto e = b + dist(engine);
+              end    = std::to_string(e);
             } else {
               for (auto i = 0; i < 5; i++) {
                 begin += CHARACTERS[random_string(engine)];
@@ -111,8 +112,12 @@ Result Benchmark(T& index, std::string benchmark_type, std::string structure,
             end.clear();
           }
 
-          auto result =
-              index.Scan(begin, end, [&](auto, auto) { return false; });
+          size_t hit  = 0;
+          auto result = index.Scan(begin, end, [&](auto) {
+            hit++;
+            if (100 <= hit) return true;
+            return false;
+          });
 
           if (result.has_value()) {
             if (structure == "PrecisionLocking") {
@@ -217,7 +222,7 @@ int main(int argc, char** argv) {
   double aps           = 0;
   double insert_aborts = 0;
   double scan_aborts   = 0;
-  double abort_rate = 0;
+  double abort_rate    = 0;
 
   {
     using namespace LineairDB::Index;
@@ -250,12 +255,12 @@ int main(int argc, char** argv) {
     insert_aborts = res.insert_aborts;
     scan_aborts   = res.scan_aborts;
     aps           = insert_aborts + scan_aborts;
-    abort_rate = (aps / (ops + aps) * 100);
+    abort_rate    = (aps / (ops + aps) * 100);
   }
   SPDLOG_INFO("IndexBench: measurement has finisihed.");
   SPDLOG_INFO("Structure;CommitPS;InsertAbortsPS;ScanAbortsPS;AbortRate");
-  SPDLOG_INFO("{0};{1};{2};{3};{4};{5}", structure, ops, insert_aborts, scan_aborts,
-              aps,abort_rate);
+  SPDLOG_INFO("{0};{1};{2};{3};{4};{5}", structure, ops, insert_aborts,
+              scan_aborts, aps, abort_rate);
 
   /** Output result as json format **/
   rapidjson::Document result_json(rapidjson::kObjectType);
