@@ -88,8 +88,8 @@ Result Benchmark(T& index, std::string benchmark_type, std::string structure,
         };
         epoch_f.MakeMeOnline();
 
-        const auto r                     = static_cast<size_t>(dist(engine));
-            const bool is_scan_operation = r < proportion;
+        const auto r                 = static_cast<size_t>(dist(engine));
+        const bool is_scan_operation = r < proportion;
         if (is_scan_bench && is_scan_operation) {
           std::string begin;
           std::string end;
@@ -113,9 +113,13 @@ Result Benchmark(T& index, std::string benchmark_type, std::string structure,
           }
 
           size_t hit  = 0;
-          auto result = index.Scan(begin, end, [&](auto) {
+          auto last_key = end;
+          auto result = index.Scan(begin, end, [&](auto key) {
             hit++;
-            if (100 <= hit) return true;
+            if (100 <= hit) {
+              last_key = key;
+              return true;
+            }
             return false;
           });
 
@@ -125,7 +129,7 @@ Result Benchmark(T& index, std::string benchmark_type, std::string structure,
             } else {
               std::this_thread::sleep_for(std::chrono::microseconds(1));
               auto result_after =
-                  index.Scan(begin, end, [&](auto, auto) { return false; });
+                  index.Scan(begin, last_key, [&](auto) { return false; });
               if (result_after.has_value() &&
                   result_after.value() == result.value()) {
                 operation_succeed++;
