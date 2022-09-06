@@ -46,8 +46,8 @@ class Database::Impl {
         logger_(c),
         callback_manager_(c),
         epoch_framework_(c.epoch_duration_ms, EventsOnEpochIsUpdated()),
-        point_index_(epoch_framework_, c),
-        checkpoint_manager_(c, point_index_, epoch_framework_) {
+        index_(c),
+        checkpoint_manager_(c, index_, epoch_framework_) {
     if (Database::Impl::CurrentDBInstance == nullptr) {
       Database::Impl::CurrentDBInstance = this;
       SPDLOG_INFO("LineairDB instance has been constructed.");
@@ -89,7 +89,8 @@ class Database::Impl {
 
         transaction_procedure(tx);
         if (tx.IsAborted()) {
-          if(precommit_clbk) precommit_clbk.value()(LineairDB::TxStatus::Aborted);
+          if (precommit_clbk)
+            precommit_clbk.value()(LineairDB::TxStatus::Aborted);
           callback(LineairDB::TxStatus::Aborted);
           epoch_framework_.MakeMeOffline();
           return;
@@ -176,7 +177,7 @@ class Database::Impl {
     callback_manager_.WaitForAllCallbacksToBeExecuted();
   }
   const Config& GetConfig() const { return config_; }
-  Index::ConcurrentTable& GetIndex() { return point_index_; }
+  Index::ConcurrentTable& GetIndex() { return index_; }
 
   // NOTE: Called by a special thread managed by EpochFramework.
   std::function<void(EpochNumber)> EventsOnEpochIsUpdated() {
@@ -232,14 +233,13 @@ class Database::Impl {
 
     thread_pool_.WaitForQueuesToBecomeEmpty();
 
-    highest_epoch = std::max(highest_epoch, durable_epoch);
-    auto&& recovery_set =
-        logger_.GetRecoverySetFromLogs(durable_epoch);
+    highest_epoch       = std::max(highest_epoch, durable_epoch);
+    auto&& recovery_set = logger_.GetRecoverySetFromLogs(durable_epoch);
     for (auto& entry : recovery_set) {
       highest_epoch = std::max(
           highest_epoch, entry.data_item_copy.transaction_id.load().epoch);
 
-      point_index_.Put(entry.key, std::move(entry.data_item_copy));
+      index_.Put(entry.key, std::move(entry.data_item_copy));
     }
     SPDLOG_DEBUG("  Global epoch is resumed from {0}", highest_epoch);
     epoch_framework_.SetGlobalEpoch(highest_epoch);
@@ -252,7 +252,7 @@ class Database::Impl {
   Recovery::Logger logger_;
   Callback::CallbackManager callback_manager_;
   EpochFramework epoch_framework_;
-  Index::ConcurrentTable point_index_;
+  Index::ConcurrentTable index_;
   Recovery::CPRManager checkpoint_manager_;
 };
 

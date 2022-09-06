@@ -21,67 +21,39 @@
 #include <cassert>
 #include <functional>
 #include <mutex>
+#include <shared_mutex>
 #include <string_view>
 #include <vector>
 
 #include "types/data_item.hpp"
 #include "types/definitions.h"
+#include "util/logger.hpp"
 
 namespace LineairDB {
 namespace Index {
 
-PrecisionLockingIndex::PrecisionLockingIndex(LineairDB::EpochFramework& e)
-    : something_inserted_(false),
-      epoch_manager_ref_(e),
-      manager_stop_flag_(false),
-      manager_([&]() {
+PrecisionLockingIndex::PrecisionLockingIndex()
+    : manager_stop_flag_(false), manager_([&]() {
         while (manager_stop_flag_.load() != true) {
-          epoch_manager_ref_.Sync();
-          const auto global       = epoch_manager_ref_.GetGlobalEpoch();
-          const auto stable_epoch = global - 2;
-          if (something_inserted_.load() == false) continue;
+          std::this_thread::sleep_for(std::chrono::milliseconds(40));
 
+          std::lock_guard<decltype(container_lock_)> lock(container_lock_);
+
+          // Clear predicate list
+          predicate_list_.Clear();
+
+          // Before deleting, we update the index container to apply
+          // insertions and deletions.
           {
-            std::lock_guard<decltype(plock_)> p_guard(plock_);
-            std::lock_guard<decltype(ulock_)> u_guard(ulock_);
-            {
-              // Clear predicate list
-              auto it = predicate_list_.begin();
-              if (it->first <= stable_epoch) {
-                const auto beg = it;
-                while (it != predicate_list_.end() &&
-                       it->first <= stable_epoch) {
-                  it++;
-                }
-                predicate_list_.erase(beg, it);
-              }
-            }
-            {
-              // Clear insert_or_delete_keys
-              auto it = insert_or_delete_key_set_.begin();
-              if (it->first <= stable_epoch) {
-                const auto beg = it;
-                while (it != insert_or_delete_key_set_.end() &&
-                       it->first <= stable_epoch) {
-                  it++;
-                }
-                const auto end = it;
-
-                // Before deleting the set of insert_or_delete_keys, we update
-                // the index container to apply such outdated (already
-                // committed) insertions and deletions.
-                for (it = beg; it != end; it++) {
-                  for (const auto& event : it->second) {
-                    container_[event.key].is_deleted = event.is_delete_event;
-                  }
-                }
-                insert_or_delete_key_set_.erase(beg, end);
-              }
-            }
+            insert_or_delete_key_set_.Every([&](const auto& event) {
+              container_[event.key].is_deleted = event.is_delete_event;
+              return true;
+            });
           }
-          something_inserted_.store(false);
+          // Clear insert_or_delete_keys
+          insert_or_delete_key_set_.Clear();
         }
-      }){};
+      }) {}
 
 PrecisionLockingIndex::~PrecisionLockingIndex() {
   manager_stop_flag_.store(true);
@@ -96,8 +68,8 @@ std::optional<size_t> PrecisionLockingIndex::Scan(
   const auto end   = std::string(e);
   if (end < begin) return std::nullopt;
 
-  std::lock_guard<decltype(plock_)> p_guard(plock_);
-  std::shared_lock<decltype(ulock_)> u_guard(ulock_);
+  std::shared_lock<decltype(container_lock_)> lk(container_lock_);
+
   if (IsOverlapWithInsertOrDelete(b, e)) { return std::nullopt; }
 
   {
@@ -111,61 +83,44 @@ std::optional<size_t> PrecisionLockingIndex::Scan(
     }
   }
 
-  const auto epoch = epoch_manager_ref_.GetMyThreadLocalEpoch();
-
-  predicate_list_[epoch].emplace_back(b, e);
-
+  predicate_list_.Add({b, e});
   return hit;
 };
+
 bool PrecisionLockingIndex::Insert(const std::string_view key) {
-  std::shared_lock<decltype(plock_)> p_guard(plock_);
+  std::shared_lock<decltype(container_lock_)> lk(container_lock_);
+
   if (IsInPredicateSet(key)) { return false; }
-
-  const auto epoch = epoch_manager_ref_.GetMyThreadLocalEpoch();
-  std::lock_guard<decltype(ulock_)> u_guard(ulock_);
-  insert_or_delete_key_set_[epoch].emplace_back(key, false);
-
-  something_inserted_.store(true, std::memory_order_relaxed);
+  insert_or_delete_key_set_.Add({key, false});
   return true;
 };
 
 void PrecisionLockingIndex::ForceInsert(const std::string_view key) {
-  const auto epoch = epoch_manager_ref_.GetMyThreadLocalEpoch();
-  std::lock_guard<decltype(ulock_)> u_guard(ulock_);
-  insert_or_delete_key_set_[epoch].emplace_back(key, false);
-
-  something_inserted_.store(true, std::memory_order_relaxed);
+  std::shared_lock<decltype(container_lock_)> lk(container_lock_);
+  insert_or_delete_key_set_.Add({key, false});
 }
 
 bool PrecisionLockingIndex::Delete(const std::string_view key) {
-  std::shared_lock<decltype(plock_)> p_guard(plock_);
-  if (IsInPredicateSet(key)) { return false; }
-  const auto epoch = epoch_manager_ref_.GetMyThreadLocalEpoch();
-  std::lock_guard<decltype(ulock_)> u_guard(ulock_);
-  insert_or_delete_key_set_[epoch].emplace_back(key, true);
+  std::shared_lock<decltype(container_lock_)> lk(container_lock_);
 
-  something_inserted_.store(true, std::memory_order_relaxed);
+  if (IsInPredicateSet(key)) { return false; }
+  insert_or_delete_key_set_.Add({key, true});
   return true;
 };
 
 bool PrecisionLockingIndex::IsInPredicateSet(const std::string_view key) {
-  for (auto it = predicate_list_.begin(); it != predicate_list_.end(); it++) {
-    for (const auto& predicate : it->second) {
-      if (predicate.begin <= key && key <= predicate.end) return true;
-    }
-  }
-  return false;
+  return !predicate_list_.Every([&](const auto& predicate) {
+    if (predicate.begin <= key && key <= predicate.end) return false;
+    return true;
+  });
 }
 
 bool PrecisionLockingIndex::IsOverlapWithInsertOrDelete(
     const std::string_view begin, const std::string_view end) {
-  for (auto it = insert_or_delete_key_set_.begin();
-       it != insert_or_delete_key_set_.end(); it++) {
-    for (const auto& event : it->second) {
-      if (begin <= event.key && event.key <= end) return true;
-    }
-  }
-  return false;
+  return !insert_or_delete_key_set_.Every([&](const auto& event) {
+    if (begin <= event.key && event.key <= end) return false;
+    return true;
+  });
 }
 
 }  // namespace Index

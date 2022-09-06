@@ -26,7 +26,7 @@
 #include <string_view>
 
 #include "types/definitions.h"
-#include "util/epoch_framework.hpp"
+#include "util/lockfree_list.hpp"
 
 namespace LineairDB {
 namespace Index {
@@ -50,22 +50,8 @@ namespace Index {
  * @ref [1] https://dl.acm.org/doi/pdf/10.1145/582318.582340
  *
  */
+
 class PrecisionLockingIndex {
- public:
-  PrecisionLockingIndex(LineairDB::EpochFramework&);
-  ~PrecisionLockingIndex();
-  std::optional<size_t> Scan(const std::string_view begin,
-                             const std::string_view end,
-                             std::function<bool(std::string_view)> operation);
-  bool Insert(const std::string_view key);
-  void ForceInsert(const std::string_view key);
-  bool Delete(const std::string_view key);
-
- private:
-  bool IsInPredicateSet(const std::string_view);
-  bool IsOverlapWithInsertOrDelete(const std::string_view,
-                                   const std::string_view);
-
   struct Predicate {
     std::string begin;
     std::string end;
@@ -83,21 +69,36 @@ class PrecisionLockingIndex {
     bool is_deleted;
   };
 
-  using PredicateList = std::map<EpochNumber, std::vector<Predicate>>;
-  using InsertOrDeleteKeySet =
-      std::map<EpochNumber, std::vector<InsertOrDeleteEvent>>;
+  using PredicateList            = Util::LockfreeList<Predicate>;
+  using InsertOrDeleteKeySet     = Util::LockfreeList<InsertOrDeleteEvent>;
   using ROWEXRangeIndexContainer = std::map<std::string, IndexItem>;
 
-  PredicateList predicate_list_;
-  std::shared_mutex plock_;
-  InsertOrDeleteKeySet insert_or_delete_key_set_;
-  std::shared_mutex ulock_;
-  ROWEXRangeIndexContainer container_;
-  std::atomic<bool> something_inserted_;
-  EpochFramework& epoch_manager_ref_;
+ public:
+  PrecisionLockingIndex();
+  ~PrecisionLockingIndex();
+  std::optional<size_t> Scan(const std::string_view begin,
+                             const std::string_view end,
+                             std::function<bool(std::string_view)> operation);
+  bool Insert(const std::string_view key);
+  void ForceInsert(const std::string_view key);
+  bool Delete(const std::string_view key);
+
+ private:
+  bool IsInPredicateSet(const std::string_view);
+  bool IsOverlapWithInsertOrDelete(const std::string_view,
+                                   const std::string_view);
+
+ private:
   std::atomic<bool> manager_stop_flag_;
   std::thread manager_;
+
+  std::shared_mutex container_lock_;  // WANTFIX remove this locking
+  PredicateList predicate_list_;
+  InsertOrDeleteKeySet insert_or_delete_key_set_;
+
+  ROWEXRangeIndexContainer container_;
 };
+
 }  // namespace Index
 }  // namespace LineairDB
 

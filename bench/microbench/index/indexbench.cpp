@@ -198,7 +198,7 @@ int main(int argc, char** argv) {
       return EXIT_FAILURE;
     }
 
-    ConcurrentTable index(epoch_framework, config);
+    ConcurrentTable index(config);
     SPDLOG_INFO("IndexBench: index population starts.");
     if (populated) Population<decltype(index)>(index);
     SPDLOG_INFO("IndexBench: population has finished.");

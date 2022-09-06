@@ -29,7 +29,6 @@ struct TransactionId {
   TransactionId() noexcept : epoch(0), tid(0) {}
   TransactionId(const EpochNumber e, uint32_t t) : epoch(e), tid(t) {}
   // TransactionId(const TransactionId& rhs) : epoch(rhs.epoch), tid(rhs.tid) {}
-  TransactionId(const TransactionId& rhs) = default;
   bool IsEmpty() { return (epoch == 0 && tid == 0); }
   TransactionId(uint64_t n) : epoch(n >> 32), tid(n & ~1llu >> 32) {}
   bool operator==(const TransactionId& rhs) {

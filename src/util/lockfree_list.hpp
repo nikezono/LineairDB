@@ -19,11 +19,19 @@ class LockfreeList {
  public:
   LockfreeList() : head_(nullptr) {}
 
-  ~LockfreeList() {
+  ~LockfreeList() { Clear(); }
+
+  LockfreeList(const LockfreeList&) : head_(nullptr) {}
+
+  T* Head() { return &(head_.load()->value); }
+
+  // TODO: thread-unsafe.
+  void Clear() {
     ForEach([&](auto* node) {
       delete node;
       return true;
     });
+    head_.store(nullptr);
   }
 
   void Add(const T& desired) {
@@ -52,6 +60,19 @@ class LockfreeList {
     }
   }
 
+  T* Find(Functor f) {
+    T* res = nullptr;
+    ForEach([&](auto* node) {
+      bool found = f != nullptr && f(node->value);
+      if (found) {
+        res = &node->value;
+        return false;
+      }
+      return true;
+    });
+    return res;
+  }
+
   size_t Size() {
     size_t size = 0;
     ForEach([&](const auto&) {
@@ -70,6 +91,38 @@ class LockfreeList {
     });
 
     return result;
+  }
+
+  // Thread-unsafe. FIXME
+  bool DeleteAnItemIf(const Functor f) {
+    auto* head = head_.load();
+    auto* here = head;
+    auto* prev = head;
+    auto* next = head;
+
+    while (here != nullptr) {
+      next                = here->next.load();
+      bool need_to_delete = f(here->value);
+      if (need_to_delete) {
+        if (head == here) {
+          head_.store(next);
+          delete here;
+          return true;
+        } else {
+          if (prev->next.compare_exchange_weak(here, next)) {
+            delete here;
+            return true;
+          } else {
+            return false;
+          }
+        }
+      } else {
+        prev = here;
+        here = next;
+      }
+    }
+
+    return false;
   }
 
  private:

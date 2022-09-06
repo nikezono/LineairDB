@@ -43,6 +43,14 @@ TEST(LockfreeListTest, AddNonTrivialType) {
   list.Add({});
 }
 
+TEST(LockfreeListTest, Find) {
+  LineairDB::Util::LockfreeList<int> list;
+  for (size_t i = 0; i < 10; ++i) { list.Add(i); }
+
+  auto* one = list.Find([&](const auto& item) { return item == 1; });
+  ASSERT_EQ(1, *one);  // decremented 10 times
+}
+
 TEST(LockfreeListTest, Every) {
   LineairDB::Util::LockfreeList<int> list;
   for (size_t i = 0; i < 10; ++i) { list.Add(i); }
@@ -93,4 +101,18 @@ TEST(LockfreeListTest, AddIfHeadSatisfies_ViaMultiThreads) {
     }));
   }
   ASSERT_EQ(1, list.Size());
+}
+
+TEST(LockfreeListTest, DeleteAnItemIf) {
+  LineairDB::Util::LockfreeList<int> list;
+  list.Add(1);
+  list.Add(2);
+
+  ASSERT_EQ(2, list.Size());
+  ASSERT_FALSE(
+      list.DeleteAnItemIf([&](const auto& item) { return item == 0; }));
+  ASSERT_TRUE(list.DeleteAnItemIf([&](const auto& item) { return item == 1; }));
+  ASSERT_EQ(1, list.Size());
+  ASSERT_TRUE(list.DeleteAnItemIf([&](const auto&) { return true; }));
+  ASSERT_EQ(0, list.Size());
 }

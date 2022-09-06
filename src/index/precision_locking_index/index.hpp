@@ -33,7 +33,7 @@ namespace Index {
 template <typename T>
 class HashTableWithPrecisionLockingIndex final : public IndexBase<T> {
  public:
-  HashTableWithPrecisionLockingIndex(EpochFramework& e) : range_index_(e) {}
+  HashTableWithPrecisionLockingIndex() {}
 
   T* Get(const std::string_view key) override final {
     return point_index_.Get(key);
@@ -50,7 +50,7 @@ class HashTableWithPrecisionLockingIndex final : public IndexBase<T> {
     if (!p_success) delete value;
     return true;
   }
-  
+
   bool Put(const std::string_view key, T&& rhs) override final {
     return Put(key, rhs);
   }

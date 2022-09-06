@@ -27,13 +27,10 @@
 namespace LineairDB {
 namespace Index {
 
-ConcurrentTable::ConcurrentTable(EpochFramework& epoch_framework, Config config,
-                                 WriteSetType recovery_set)
-    : epoch_manager_ref_(epoch_framework) {
+ConcurrentTable::ConcurrentTable(Config config, WriteSetType recovery_set) {
   switch (config.index_structure) {
     case Config::IndexStructure::HashTableWithPrecisionLockingIndex:
-      index_ = std::make_unique<HashTableWithPrecisionLockingIndex<DataItem>>(
-          epoch_manager_ref_);
+      index_ = std::make_unique<HashTableWithPrecisionLockingIndex<DataItem>>();
       break;
     case Config::IndexStructure::OpenBwTree:
     default:
