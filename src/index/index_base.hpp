@@ -53,6 +53,8 @@ class IndexBase {
   virtual std::optional<size_t> Scan(
       const std::string_view begin, const std::string_view end,
       std::function<bool(std::string_view, T&)> operation) = 0;
+
+  virtual bool ReScan(const std::string_view, const std::string_view) = 0;
 };
 
 }  // namespace Index

@@ -18,8 +18,8 @@
 #define LINEAIRDB_CONFIG_H
 
 #include <cstddef>
-#include <thread>
 #include <string>
+#include <thread>
 
 namespace LineairDB {
 
@@ -74,7 +74,11 @@ struct Config {
    */
   Logger logger = ThreadLocalLogger;
 
-  enum IndexStructure { HashTableWithPrecisionLockingIndex, OpenBwTree };
+  enum IndexStructure {
+    HashTableWithPrecisionLockingIndex,
+    HashTableWithOptimisticPrecisionLockingIndex,
+    OpenBwTree
+  };
   /**
    * @brief
    * Set the type of index.

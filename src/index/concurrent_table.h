@@ -47,6 +47,7 @@ class ConcurrentTable {
   std::optional<size_t> Scan(
       const std::string_view begin, const std::string_view end,
       std::function<bool(std::string_view, DataItem&)> operation);
+  bool ReScan(const std::string_view begin, const std::string_view end);
 
  private:
   std::unique_ptr<IndexBase<DataItem>> index_;

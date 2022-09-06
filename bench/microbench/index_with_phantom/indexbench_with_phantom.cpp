@@ -31,7 +31,6 @@
 #include "index/concurrent_table.h"
 #include "lineairdb/config.h"
 #include "spdlog/spdlog.h"
-#include "util/epoch_framework.hpp"
 
 const std::string CHARACTERS =
     "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -39,13 +38,10 @@ const std::string CHARACTERS =
 constexpr auto PopulationSize = 100000;
 
 template <typename T>
-void Population(T& index, LineairDB::EpochFramework& epoch_f) {
-  epoch_f.MakeMeOnline();
+void Population(T& index) {
   for (auto i = 0; i < PopulationSize; i++) {
     index.GetOrInsert(std::to_string(i));
   }
-  epoch_f.MakeMeOffline();
-  epoch_f.Sync();
 }
 struct Result {
   double cps           = 0;
@@ -55,8 +51,8 @@ struct Result {
 
 template <typename T>
 Result Benchmark(T& index, std::string benchmark_type, std::string structure,
-                 LineairDB::EpochFramework& epoch_f, size_t threads,
-                 size_t proportion, bool populated, size_t duration) {
+                 size_t threads, size_t proportion, bool populated,
+                 size_t duration) {
   std::atomic<size_t> count_down_latch(0);
   std::atomic<bool> end_flag(false);
   std::atomic<size_t> total_succeed(0);
@@ -86,7 +82,6 @@ Result Benchmark(T& index, std::string benchmark_type, std::string structure,
           total_insert_aborts.fetch_add(operation_insert_aborts);
           break;
         };
-        epoch_f.MakeMeOnline();
 
         const auto r                 = static_cast<size_t>(dist(engine));
         const bool is_scan_operation = r < proportion;
@@ -112,9 +107,9 @@ Result Benchmark(T& index, std::string benchmark_type, std::string structure,
             end.clear();
           }
 
-          size_t hit  = 0;
+          size_t hit    = 0;
           auto last_key = end;
-          auto result = index.Scan(begin, end, [&](auto key) {
+          auto result   = index.Scan(begin, end, [&](auto key) {
             hit++;
             if (100 <= hit) {
               last_key = key;
@@ -124,17 +119,25 @@ Result Benchmark(T& index, std::string benchmark_type, std::string structure,
           });
 
           if (result.has_value()) {
-            if (structure == "PrecisionLocking") {
+            if (structure == "PLI") {
               operation_succeed++;
-            } else {
-              std::this_thread::sleep_for(std::chrono::microseconds(1));
-              auto result_after =
-                  index.Scan(begin, last_key, [&](auto) { return false; });
-              if (result_after.has_value() &&
-                  result_after.value() == result.value()) {
+            } else if (structure == "OPLI") {
+              auto interleaved = index.ReScan(begin, last_key);
+              if (interleaved) {
                 operation_succeed++;
               } else {
                 operation_scan_aborts++;
+              }
+            } else {
+              if (structure == "OpenBwTree") {
+                auto result_after =
+                    index.Scan(begin, last_key, [&](auto) { return false; });
+                if (result_after.has_value() &&
+                    result_after.value() == result.value()) {
+                  operation_succeed++;
+                } else {
+                  operation_scan_aborts++;
+                }
               }
             }
           } else {
@@ -157,7 +160,6 @@ Result Benchmark(T& index, std::string benchmark_type, std::string structure,
             operation_insert_aborts++;
           }
         }
-        epoch_f.MakeMeOffline();
       }
     }));
   }
@@ -196,7 +198,7 @@ int main(int argc, char** argv) {
       ("T,type", "Type of benchmark",
        cxxopts::value<std::string>()->default_value("scan"))  //
       ("s,structure", "Index data structure",
-       cxxopts::value<std::string>()->default_value("PrecisionLocking"))  //
+       cxxopts::value<std::string>()->default_value("PLI"))  //
       ("p,proportion", "Proportion of 'scan' operation",
        cxxopts::value<size_t>()->default_value("10"))  //
       ("P,populated", "All data items are populated before benchmarking",
@@ -231,12 +233,13 @@ int main(int argc, char** argv) {
   {
     using namespace LineairDB::Index;
 
-    LineairDB::EpochFramework epoch_framework;
-    epoch_framework.Start();
     LineairDB::Config config;
-    if (structure == "PrecisionLocking") {
+    if (structure == "PLI") {
       config.index_structure =
           decltype(config)::IndexStructure::HashTableWithPrecisionLockingIndex;
+    } else if (structure == "OPLI") {
+      config.index_structure = decltype(config)::IndexStructure::
+          HashTableWithOptimisticPrecisionLockingIndex;
     } else if (structure == "OpenBwTree") {
       config.index_structure = decltype(config)::IndexStructure::OpenBwTree;
     } else {
@@ -248,13 +251,13 @@ int main(int argc, char** argv) {
     ConcurrentTable index(config);
     if (populated) {
       SPDLOG_INFO("IndexBench: index population starts.");
-      Population<decltype(index)>(index, epoch_framework);
+      Population<decltype(index)>(index);
       SPDLOG_INFO("IndexBench: population has finished.");
     }
 
-    auto res      = Benchmark<decltype(index)>(index, benchmark_type, structure,
-                                          epoch_framework, threads, proportion,
-                                          populated, measurement_duration);
+    auto res =
+        Benchmark<decltype(index)>(index, benchmark_type, structure, threads,
+                                   proportion, populated, measurement_duration);
     ops           = res.cps;
     insert_aborts = res.insert_aborts;
     scan_aborts   = res.scan_aborts;

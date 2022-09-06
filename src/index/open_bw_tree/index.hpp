@@ -34,7 +34,8 @@ class OpenBwTreeIndex final : public IndexBase<T> {
   OpenBwTreeIndex() : maximum(150) {
     // TODO FIXME we cannot know the number of threads that accesses this index
     // since LineairDB allows client-threads to manipulate database directly.
-    // Therefore, if a user spawn threads more than the `maximum`, it will causes the SIGABRT of OpenBwTree;
+    // Therefore, if a user spawn threads more than the `maximum`, it will
+    // causes the SIGABRT of OpenBwTree;
     bwtree_.UpdateThreadLocal(maximum);
     PreHook();
   }
@@ -74,9 +75,8 @@ class OpenBwTreeIndex final : public IndexBase<T> {
       const std::string_view begin, const std::string_view end,
       std::function<bool(std::string_view)> operation) override final {
     PreHook();
-    return Scan(begin, end, [&](std::string_view key, T&) {
-      return operation(key);
-    });
+    return Scan(begin, end,
+                [&](std::string_view key, T&) { return operation(key); });
   }
 
   std::optional<size_t> Scan(
@@ -98,7 +98,10 @@ class OpenBwTreeIndex final : public IndexBase<T> {
       }
     }
     return hit;
+  }
 
+  bool ReScan(const std::string_view, const std::string_view) override final {
+    return true;
   }
 
   void ForEach(std::function<bool(std::string_view, T&)> f) override final {
@@ -114,7 +117,7 @@ class OpenBwTreeIndex final : public IndexBase<T> {
   void PreHook() {
     auto thread_id = wangziqi2013::bwtree::BwTreeBase::gc_id;
     if (thread_id == -1) {
-      auto now = NumThreads.fetch_add(1);
+      [[maybe_unused]] auto now = NumThreads.fetch_add(1);
       assert(now < maximum);
       bwtree_.RegisterThread();
     }

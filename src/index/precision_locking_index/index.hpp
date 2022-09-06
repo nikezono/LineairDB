@@ -30,7 +30,7 @@ namespace LineairDB {
 
 namespace Index {
 
-template <typename T>
+template <typename T, Option OPT = Option::Optimistic>
 class HashTableWithPrecisionLockingIndex final : public IndexBase<T> {
  public:
   HashTableWithPrecisionLockingIndex() {}
@@ -81,6 +81,11 @@ class HashTableWithPrecisionLockingIndex final : public IndexBase<T> {
     });
   }
 
+  bool ReScan(const std::string_view begin,
+              const std::string_view end) override final {
+    return range_index_.IsOverlapWithInsertOrDelete(begin, end);
+  }
+
   /**
    * @brief Scan without values; that is, an interface to collect only keys from
    * range index.
@@ -97,7 +102,7 @@ class HashTableWithPrecisionLockingIndex final : public IndexBase<T> {
 
  private:
   MPMCConcurrentSetImpl<T> point_index_;
-  PrecisionLockingIndex range_index_;
+  PrecisionLockingIndex<OPT> range_index_;
 };
 
 }  // namespace Index

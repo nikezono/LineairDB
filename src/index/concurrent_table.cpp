@@ -30,7 +30,12 @@ namespace Index {
 ConcurrentTable::ConcurrentTable(Config config, WriteSetType recovery_set) {
   switch (config.index_structure) {
     case Config::IndexStructure::HashTableWithPrecisionLockingIndex:
-      index_ = std::make_unique<HashTableWithPrecisionLockingIndex<DataItem>>();
+      index_ = std::make_unique<
+          HashTableWithPrecisionLockingIndex<DataItem, Option::Pessimistic>>();
+      break;
+    case Config::IndexStructure::HashTableWithOptimisticPrecisionLockingIndex:
+      index_ = std::make_unique<
+          HashTableWithPrecisionLockingIndex<DataItem, Option::Optimistic>>();
       break;
     case Config::IndexStructure::OpenBwTree:
     default:
@@ -78,6 +83,11 @@ std::optional<size_t> ConcurrentTable::Scan(
     const std::string_view begin, const std::string_view end,
     std::function<bool(std::string_view, DataItem&)> operation) {
   return index_->Scan(begin, end, operation);
+};
+
+bool ConcurrentTable::ReScan(const std::string_view begin,
+                             const std::string_view end) {
+  return index_->ReScan(begin, end);
 };
 
 }  // namespace Index
