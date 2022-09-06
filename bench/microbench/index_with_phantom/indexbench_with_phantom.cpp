@@ -26,6 +26,7 @@
 #include <iostream>
 #include <random>
 #include <thread>
+#include <unordered_set>
 #include <variant>
 
 #include "index/concurrent_table.h"
@@ -92,9 +93,11 @@ Result Benchmark(T& index, std::string benchmark_type, std::string structure,
           for (;;) {
             if (populated) {
               auto b = dist_for_populated(engine);
+              if (PopulationSize <= b) b = PopulationSize - 1;
               begin  = std::to_string(b);
               auto e = b + dist(engine);
-              end    = std::to_string(e);
+              if (PopulationSize <= e) e = PopulationSize - 1;
+              end = std::to_string(e);
             } else {
               for (auto i = 0; i < 5; i++) {
                 begin += CHARACTERS[random_string(engine)];
@@ -109,55 +112,95 @@ Result Benchmark(T& index, std::string benchmark_type, std::string structure,
 
           size_t hit    = 0;
           auto last_key = end;
-          auto result   = index.Scan(begin, end, [&](auto key) {
-            hit++;
-            if (100 <= hit) {
-              last_key = key;
-              return true;
-            }
-            return false;
-          });
-
-          if (result.has_value()) {
-            if (structure == "PLI") {
+          if (structure == "PLI") {
+            auto result = index.Scan(begin, end, [&](auto key) {
+              hit++;
+              if (100 <= hit) {
+                last_key = key;
+                return true;
+              }
+              return false;
+            });
+            if (result.has_value()) {
               operation_succeed++;
-            } else if (structure == "OPLI") {
-              auto interleaved = index.ReScan(begin, last_key);
-              if (interleaved) {
-                operation_succeed++;
-              } else {
-                operation_scan_aborts++;
-              }
             } else {
-              if (structure == "OpenBwTree") {
-                auto result_after =
-                    index.Scan(begin, last_key, [&](auto) { return false; });
-                if (result_after.has_value() &&
-                    result_after.value() == result.value()) {
-                  operation_succeed++;
-                } else {
-                  operation_scan_aborts++;
-                }
+              operation_scan_aborts++;
+            }
+          } else if (structure == "OPLI") {
+            auto result = index.Scan(begin, end, [&](auto key) {
+              hit++;
+              if (100 <= hit) {
+                last_key = key;
+                return true;
               }
+              return false;
+            });
+            if (index.ReScan(begin, last_key)) {
+              operation_succeed++;
+            } else {
+              operation_scan_aborts++;
+            }
+
+          } else if (structure == "OpenBwTree") {
+            std::unordered_set<decltype(begin)> hit_keys;
+            index.Scan(begin, end, [&](auto key) {
+              hit++;
+              hit_keys.emplace(key);
+              if (100 <= hit) {
+                last_key = key;
+                return true;
+              }
+              return false;
+            });
+
+            // Fence;
+            size_t h     = 0;
+            bool phantom = false;
+            index.Scan(begin, last_key, [&](auto key) {
+              if (hit_keys.count(std::string(key)) == 0) {
+                phantom = true;
+                return true;
+              }
+              h++;
+              if (h == hit) { return true; }
+              return false;
+            });
+
+            if (!phantom) {
+              operation_succeed++;
+            } else {
+              operation_scan_aborts++;
             }
           } else {
-            operation_scan_aborts++;
+            exit(EXIT_FAILURE);
           }
 
         } else {
           std::string key;
           if (populated) {
-            key = std::to_string(dist_for_populated(engine));
+            auto i = dist_for_populated(engine);
+            if (PopulationSize <= i) i = PopulationSize - 1;
+            key = std::to_string(i);
+
           } else {
             for (auto i = 0; i < 5; i++) {
               key += CHARACTERS[random_string(engine)];
             }
           }
-          bool success = index.GetOrInsert(key);
+
+          bool success = true;
+          auto* item   = index.Get(key);
+          if (item == nullptr) {
+            if (populated) {
+              SPDLOG_ERROR("Populated but not exist {}", key);
+              exit(EXIT_FAILURE);
+            }
+            success = index.Put(key, {});
+          }
           if (success) {
             operation_succeed++;
           } else {
-            operation_insert_aborts++;
+            if (!populated) operation_insert_aborts++;
           }
         }
       }
@@ -265,7 +308,8 @@ int main(int argc, char** argv) {
     abort_rate    = (aps / (ops + aps) * 100);
   }
   SPDLOG_INFO("IndexBench: measurement has finisihed.");
-  SPDLOG_INFO("Structure;CommitPS;InsertAbortsPS;ScanAbortsPS;AbortRate");
+  SPDLOG_INFO(
+      "Structure;CommitPS;InsertAbortsPS;ScanAbortsPS;AbortPS;AbortRate");
   SPDLOG_INFO("{0};{1};{2};{3};{4};{5}", structure, ops, insert_aborts,
               scan_aborts, aps, abort_rate);
 

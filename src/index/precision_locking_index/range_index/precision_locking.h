@@ -185,11 +185,10 @@ bool PrecisionLockingIndex<OPT>::Delete(const std::string_view key) {
 
 template <Option OPT>
 bool PrecisionLockingIndex<OPT>::IsInPredicateSet(const std::string_view key) {
-  if constexpr (OPT == Option::Pessimistic) return false;
+  if constexpr (OPT == Option::Optimistic) return false;
 
   return !predicate_list_.Every([&](const auto& predicate) {
-    if (predicate.begin <= key && key <= predicate.end) return false;
-    return true;
+    return (key < predicate.begin || predicate.end < key);
   });
 }
 
@@ -197,8 +196,7 @@ template <Option OPT>
 bool PrecisionLockingIndex<OPT>::IsOverlapWithInsertOrDelete(
     const std::string_view begin, const std::string_view end) {
   return !insert_or_delete_key_set_.Every([&](const auto& event) {
-    if (begin <= event.key && event.key <= end) return false;
-    return true;
+    return (event.key < begin || end < event.key);
   });
 }
 
