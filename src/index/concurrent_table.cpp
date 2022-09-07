@@ -19,6 +19,7 @@
 #include <functional>
 
 #include "index/open_bw_tree/index.hpp"
+#include "index/open_bw_tree_w_pli/index.hpp"
 #include "index/precision_locking_index/index.hpp"
 #include "lineairdb/config.h"
 #include "types/data_item.hpp"
@@ -38,6 +39,14 @@ ConcurrentTable::ConcurrentTable(Config config, WriteSetType recovery_set) {
           HashTableWithPrecisionLockingIndex<DataItem, Option::Optimistic>>();
       break;
     case Config::IndexStructure::OpenBwTree:
+      index_ = std::make_unique<OpenBwTreeIndex<DataItem>>();
+    case Config::IndexStructure::OpenBwTreeWithPLI:
+      index_ = std::make_unique<OpenBwTreeWithPrecisionLockingIndex<
+          DataItem, BwOption::Pessimistic>>();
+    case Config::IndexStructure::OpenBwTreeWithOPLI:
+      index_ = std::make_unique<OpenBwTreeWithPrecisionLockingIndex<
+          DataItem, BwOption::Optimistic>>();
+
     default:
       index_ = std::make_unique<OpenBwTreeIndex<DataItem>>();
       break;

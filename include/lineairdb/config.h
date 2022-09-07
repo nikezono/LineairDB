@@ -77,7 +77,9 @@ struct Config {
   enum IndexStructure {
     HashTableWithPrecisionLockingIndex,
     HashTableWithOptimisticPrecisionLockingIndex,
-    OpenBwTree
+    OpenBwTree,
+    OpenBwTreeWithPLI,
+    OpenBwTreeWithOPLI,
   };
   /**
    * @brief

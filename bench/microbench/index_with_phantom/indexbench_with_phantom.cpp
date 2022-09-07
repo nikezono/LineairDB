@@ -112,7 +112,7 @@ Result Benchmark(T& index, std::string benchmark_type, std::string structure,
 
           size_t hit    = 0;
           auto last_key = end;
-          if (structure == "PLI") {
+          if (structure == "PLI" || structure == "OpenBw+PLI") {
             auto result = index.Scan(begin, end, [&](auto key) {
               hit++;
               if (100 <= hit) {
@@ -126,7 +126,7 @@ Result Benchmark(T& index, std::string benchmark_type, std::string structure,
             } else {
               operation_scan_aborts++;
             }
-          } else if (structure == "OPLI") {
+          } else if (structure == "OPLI" || structure == "OpenBw+OPLI") {
             auto result = index.Scan(begin, end, [&](auto key) {
               hit++;
               if (100 <= hit) {
@@ -285,6 +285,12 @@ int main(int argc, char** argv) {
           HashTableWithOptimisticPrecisionLockingIndex;
     } else if (structure == "OpenBwTree") {
       config.index_structure = decltype(config)::IndexStructure::OpenBwTree;
+    } else if (structure == "OpenBw+PLI") {
+      config.index_structure =
+          decltype(config)::IndexStructure::OpenBwTreeWithPLI;
+    } else if (structure == "OpenBw+OPLI") {
+      config.index_structure =
+          decltype(config)::IndexStructure::OpenBwTreeWithOPLI;
     } else {
       std::cout << "invalid structure name." << std::endl
                 << options.help() << std::endl;

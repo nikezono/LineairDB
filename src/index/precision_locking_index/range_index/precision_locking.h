@@ -144,6 +144,10 @@ std::optional<size_t> PrecisionLockingIndex<OPT>::Scan(
   std::shared_lock<decltype(container_lock_)> lk(container_lock_);
 
   if (IsOverlapWithInsertOrDelete(b, e)) { return std::nullopt; }
+  if constexpr (OPT == Option::Pessimistic) {
+    predicate_list_.Add({b, e});
+    if (IsOverlapWithInsertOrDelete(b, e)) { return std::nullopt; }
+  }
 
   {
     auto it     = container_.lower_bound(begin);
@@ -155,31 +159,27 @@ std::optional<size_t> PrecisionLockingIndex<OPT>::Scan(
       if (cancel) break;
     }
   }
-  if constexpr (OPT == Option::Pessimistic) { predicate_list_.Add({b, e}); }
   return hit;
 };
 
 template <Option OPT>
 bool PrecisionLockingIndex<OPT>::Insert(const std::string_view key) {
-  std::shared_lock<decltype(container_lock_)> lk(container_lock_);
-
   if (IsInPredicateSet(key)) { return false; }
   insert_or_delete_key_set_.Add({key, false});
+  if (IsInPredicateSet(key)) { return false; }
   return true;
 };
 
 template <Option OPT>
 void PrecisionLockingIndex<OPT>::ForceInsert(const std::string_view key) {
-  std::shared_lock<decltype(container_lock_)> lk(container_lock_);
   insert_or_delete_key_set_.Add({key, false});
 }
 
 template <Option OPT>
 bool PrecisionLockingIndex<OPT>::Delete(const std::string_view key) {
-  std::shared_lock<decltype(container_lock_)> lk(container_lock_);
-
   if (IsInPredicateSet(key)) { return false; }
   insert_or_delete_key_set_.Add({key, true});
+  if (IsInPredicateSet(key)) { return false; }
   return true;
 };
 
