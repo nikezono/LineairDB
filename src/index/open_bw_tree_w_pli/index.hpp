@@ -107,8 +107,11 @@ class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
    * @note return false if a phantom anomaly has detected.
    */
   bool Put(const std::string_view key, const T& rhs) override final {
+    std::shared_lock<decltype(container_lock_)> lk(container_lock_);
+
     if (IsInPredicateSet(key)) { return false; }
     insert_or_delete_key_set_.Add({key, false});
+    bw_tree_.Put(key, rhs);
     if (IsInPredicateSet(key)) { return false; }
     return true;
   }
@@ -143,6 +146,8 @@ class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
 
   bool ReScan(const std::string_view begin,
               const std::string_view end) override final {
+    std::shared_lock<decltype(container_lock_)> lk(container_lock_);
+
     return !IsOverlapWithInsertOrDelete(begin, end);
   }
 

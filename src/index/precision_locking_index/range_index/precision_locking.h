@@ -87,7 +87,8 @@ class PrecisionLockingIndex {
 
   bool IsInPredicateSet(const std::string_view);
   bool IsOverlapWithInsertOrDelete(const std::string_view,
-                                   const std::string_view);
+                                   const std::string_view,
+                                   bool lock_required = false);
 
  private:
   std::atomic<bool> manager_stop_flag_;
@@ -164,6 +165,8 @@ std::optional<size_t> PrecisionLockingIndex<OPT>::Scan(
 
 template <Option OPT>
 bool PrecisionLockingIndex<OPT>::Insert(const std::string_view key) {
+  std::shared_lock<decltype(container_lock_)> lk(container_lock_);
+
   if (IsInPredicateSet(key)) { return false; }
   insert_or_delete_key_set_.Add({key, false});
   if (IsInPredicateSet(key)) { return false; }
@@ -177,6 +180,8 @@ void PrecisionLockingIndex<OPT>::ForceInsert(const std::string_view key) {
 
 template <Option OPT>
 bool PrecisionLockingIndex<OPT>::Delete(const std::string_view key) {
+  std::shared_lock<decltype(container_lock_)> lk(container_lock_);
+
   if (IsInPredicateSet(key)) { return false; }
   insert_or_delete_key_set_.Add({key, true});
   if (IsInPredicateSet(key)) { return false; }
@@ -194,7 +199,14 @@ bool PrecisionLockingIndex<OPT>::IsInPredicateSet(const std::string_view key) {
 
 template <Option OPT>
 bool PrecisionLockingIndex<OPT>::IsOverlapWithInsertOrDelete(
-    const std::string_view begin, const std::string_view end) {
+    const std::string_view begin, const std::string_view end,
+    bool lock_required) {
+  if (lock_required) {
+    std::shared_lock<decltype(container_lock_)> lk(container_lock_);
+    return !insert_or_delete_key_set_.Every([&](const auto& event) {
+      return (event.key < begin || end < event.key);
+    });
+  }
   return !insert_or_delete_key_set_.Every([&](const auto& event) {
     return (event.key < begin || end < event.key);
   });

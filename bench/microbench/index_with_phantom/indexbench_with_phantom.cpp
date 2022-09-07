@@ -135,8 +135,12 @@ Result Benchmark(T& index, std::string benchmark_type, std::string structure,
               }
               return false;
             });
-            if (index.ReScan(begin, last_key)) {
-              operation_succeed++;
+            if (result.has_value()) {
+              if (index.ReScan(begin, last_key)) {
+                operation_succeed++;
+              } else {
+                operation_scan_aborts++;
+              }
             } else {
               operation_scan_aborts++;
             }
@@ -154,15 +158,12 @@ Result Benchmark(T& index, std::string benchmark_type, std::string structure,
             });
 
             // Fence;
-            size_t h     = 0;
             bool phantom = false;
             index.Scan(begin, last_key, [&](auto key) {
               if (hit_keys.count(std::string(key)) == 0) {
                 phantom = true;
                 return true;
               }
-              h++;
-              if (h == hit) { return true; }
               return false;
             });
 

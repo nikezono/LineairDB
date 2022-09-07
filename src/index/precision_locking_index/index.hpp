@@ -83,7 +83,7 @@ class HashTableWithPrecisionLockingIndex final : public IndexBase<T> {
 
   bool ReScan(const std::string_view begin,
               const std::string_view end) override final {
-    return !range_index_.IsOverlapWithInsertOrDelete(begin, end);
+    return !range_index_.IsOverlapWithInsertOrDelete(begin, end, true);
   }
 
   /**
