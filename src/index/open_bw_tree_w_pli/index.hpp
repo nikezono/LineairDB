@@ -111,8 +111,8 @@ class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
 
     if (IsInPredicateSet(key)) { return false; }
     insert_or_delete_key_set_.Add({key, false});
-    bw_tree_.Put(key, rhs);
     if (IsInPredicateSet(key)) { return false; }
+    bw_tree_.Put(key, rhs);
     return true;
   }
 
