@@ -72,8 +72,12 @@ class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
  public:
   OpenBwTreeWithPrecisionLockingIndex()
       : manager_stop_flag_(false), manager_([&]() {
+          char* e = std::getenv("EPOCH");
+          std::string ep(e);
+          size_t epoch = std::stoi(ep);
+          SPDLOG_INFO("EPOCH {}", epoch);
           while (manager_stop_flag_.load() != true) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(40));
+            std::this_thread::sleep_for(std::chrono::milliseconds(epoch));
 
             // Clear predicate list
             if constexpr (OPT == BwOption::Pessimistic) {
