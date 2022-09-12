@@ -26,6 +26,7 @@
 
 #include "index/index_base.hpp"
 #include "index/open_bw_tree/index.hpp"
+#include "index/precision_locking_index/point_index/mpmc_concurrent_set_impl.hpp"
 #include "util/lockfree_list.hpp"
 
 namespace LineairDB {
@@ -67,6 +68,7 @@ class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
   ROWEXRangeIndexContainer container_;
 
   OpenBwTreeIndex<T> bw_tree_;
+  MPMCConcurrentSetImpl<T> point_index_;
 
  public:
   OpenBwTreeWithPrecisionLockingIndex()
@@ -74,7 +76,7 @@ class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
           while (manager_stop_flag_.load() != true) {
             std::this_thread::sleep_for(std::chrono::milliseconds(40));
 
-            std::lock_guard<decltype(container_lock_)> lock(container_lock_);
+            std::lock_guard<decltype(container_lock_)> lk(container_lock_);
 
             // Clear predicate list
             if constexpr (OPT == BwOption::Pessimistic) {
@@ -84,7 +86,7 @@ class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
             // insertions and deletions.
             {
               insert_or_delete_key_set_.Every([&](const auto& event) {
-                container_[event.key].is_deleted = event.is_delete_event;
+                bw_tree_.Put(event.key, {});
                 return true;
               });
             }
@@ -100,19 +102,23 @@ class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
   }
 
   T* Get(const std::string_view key) override final {
-    return bw_tree_.Get(key);
+    return point_index_.Get(key);
   }
 
   /**
    * @note return false if a phantom anomaly has detected.
    */
   bool Put(const std::string_view key, const T& rhs) override final {
-    std::shared_lock<decltype(container_lock_)> lk(container_lock_);
+    {
+      std::shared_lock<decltype(container_lock_)> lk(container_lock_);
 
-    if (IsInPredicateSet(key)) { return false; }
-    insert_or_delete_key_set_.Add({key, false});
-    if (IsInPredicateSet(key)) { return false; }
-    bw_tree_.Put(key, rhs);
+      if (IsInPredicateSet(key)) { return false; }
+      insert_or_delete_key_set_.Add({key, false});
+      if (IsInPredicateSet(key)) { return false; }
+    }
+    auto* value    = new T(rhs);
+    bool p_success = point_index_.Put(key, value);
+    if (!p_success) delete value;
     return true;
   }
 
@@ -121,7 +127,9 @@ class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
   }
 
   void ForcePutBlankEntry(const std::string_view key) override final {
-    bw_tree_.ForcePutBlankEntry(key);
+    auto* new_entry = new T();
+    if (!point_index_.Put(key, new_entry))
+      delete new_entry;  // already inserted
     insert_or_delete_key_set_.Add({key, false});
   }
 
@@ -163,25 +171,16 @@ class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
     const auto end   = std::string(e);
     if (end < begin) return std::nullopt;
 
-    std::shared_lock<decltype(container_lock_)> lk(container_lock_);
-
-    if (IsOverlapWithInsertOrDelete(b, e)) { return std::nullopt; }
-    if constexpr (OPT == BwOption::Pessimistic) {
-      predicate_list_.Add({b, e});
-      if (IsOverlapWithInsertOrDelete(b, e)) { return std::nullopt; }
-    }
-
     {
-      auto it     = container_.lower_bound(begin);
-      auto it_end = container_.upper_bound(end);
-      for (; it != it_end; it++) {
-        if (it->second.is_deleted) continue;
-        hit++;
-        auto cancel = operation(it->first);
-        if (cancel) break;
+      std::shared_lock<decltype(container_lock_)> lk(container_lock_);
+
+      if (IsOverlapWithInsertOrDelete(b, e)) { return std::nullopt; }
+      if constexpr (OPT == BwOption::Pessimistic) {
+        predicate_list_.Add({b, e});
+        if (IsOverlapWithInsertOrDelete(b, e)) { return std::nullopt; }
       }
     }
-    return hit;
+    return bw_tree_.Scan(begin, end, operation);
   }
 
   void ForEach(std::function<bool(std::string_view, T&)> f) override final {
