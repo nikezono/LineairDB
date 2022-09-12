@@ -40,13 +40,15 @@ ConcurrentTable::ConcurrentTable(Config config, WriteSetType recovery_set) {
       break;
     case Config::IndexStructure::OpenBwTree:
       index_ = std::make_unique<OpenBwTreeIndex<DataItem>>();
+      break;
     case Config::IndexStructure::OpenBwTreeWithPLI:
       index_ = std::make_unique<OpenBwTreeWithPrecisionLockingIndex<
           DataItem, BwOption::Pessimistic>>();
+      break;
     case Config::IndexStructure::OpenBwTreeWithOPLI:
       index_ = std::make_unique<OpenBwTreeWithPrecisionLockingIndex<
           DataItem, BwOption::Optimistic>>();
-
+      break;
     default:
       index_ = std::make_unique<OpenBwTreeIndex<DataItem>>();
       break;
