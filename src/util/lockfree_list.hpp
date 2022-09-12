@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstddef>
 #include <functional>
+#include <vector>
 
 #include "util/logger.hpp"
 
@@ -16,22 +17,30 @@ class LockfreeList {
   using Functor     = std::function<bool(const T&)>;
   using NodeFunctor = std::function<bool(Node*)>;
 
+ private:
+  std::atomic<Node*> head_;
+  std::vector<Node*> garbages_;
+
  public:
   LockfreeList() : head_(nullptr) {}
 
-  ~LockfreeList() { Clear(); }
+  ~LockfreeList() {
+    for (auto* garbage : garbages_) {
+      ForEach(garbage, [&](auto* node) {
+        delete node;
+        return true;
+      });
+    }
+  }
 
   LockfreeList(const LockfreeList&) : head_(nullptr) {}
 
   T* Head() { return &(head_.load()->value); }
 
-  // TODO: thread-unsafe.
+  // TODO: thread-unsafe. gc.
   void Clear() {
-    ForEach([&](auto* node) {
-      delete node;
-      return true;
-    });
-    head_.store(nullptr);
+    auto* pre = head_.exchange(nullptr);
+    garbages_.emplace_back(pre);
   }
 
   void Add(const T& desired) {
@@ -137,14 +146,23 @@ class LockfreeList {
     }
   }
 
+  void ForEach(Node* n, const NodeFunctor f) {
+    auto* h    = n;
+    auto* prev = h;
+    while (h != nullptr) {
+      prev        = h;
+      h           = h->next.load();
+      bool result = f(prev);
+      if (!result) break;
+    }
+  }
+
   struct Node {
     T value;
     std::atomic<Node*> next;
     Node(const T& v, Node* n = nullptr) : value(v), next(n) {}
     Node() : next(nullptr) {}
   };
-
-  std::atomic<Node*> head_;
 };
 
 }  // namespace Util

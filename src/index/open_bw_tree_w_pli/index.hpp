@@ -62,7 +62,6 @@ class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
   std::atomic<bool> manager_stop_flag_;
   std::thread manager_;
 
-  std::shared_mutex container_lock_;  // WANTFIX remove this locking
   PredicateList predicate_list_;
   InsertOrDeleteKeySet insert_or_delete_key_set_;
   ROWEXRangeIndexContainer container_;
@@ -75,8 +74,6 @@ class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
       : manager_stop_flag_(false), manager_([&]() {
           while (manager_stop_flag_.load() != true) {
             std::this_thread::sleep_for(std::chrono::milliseconds(40));
-
-            std::lock_guard<decltype(container_lock_)> lk(container_lock_);
 
             // Clear predicate list
             if constexpr (OPT == BwOption::Pessimistic) {
@@ -110,8 +107,6 @@ class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
    */
   bool Put(const std::string_view key, const T& rhs) override final {
     {
-      std::shared_lock<decltype(container_lock_)> lk(container_lock_);
-
       if (IsInPredicateSet(key)) { return false; }
       insert_or_delete_key_set_.Add({key, false});
       if (IsInPredicateSet(key)) { return false; }
@@ -154,8 +149,6 @@ class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
 
   bool ReScan(const std::string_view begin,
               const std::string_view end) override final {
-    std::shared_lock<decltype(container_lock_)> lk(container_lock_);
-
     return !IsOverlapWithInsertOrDelete(begin, end);
   }
 
@@ -172,8 +165,6 @@ class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
     if (end < begin) return std::nullopt;
 
     {
-      std::shared_lock<decltype(container_lock_)> lk(container_lock_);
-
       if (IsOverlapWithInsertOrDelete(b, e)) { return std::nullopt; }
       if constexpr (OPT == BwOption::Pessimistic) {
         predicate_list_.Add({b, e});
