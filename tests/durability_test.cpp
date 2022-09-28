@@ -174,7 +174,7 @@ TEST_F(DurabilityTest, LogFileSizeIsBounded) {  // a.k.a., checkpointing
     tx.Write<int>("alice", value);
   });
 
-  size_t filesize                              = 0;
+  size_t filesize = 0;
   ASSERT_EQ(filesize, getLogDirectorySize(config));
   bool filesize_is_monotonically_increasing = true;
 
@@ -212,7 +212,7 @@ TEST_F(DurabilityTest,
     tx.Write<int>("alice", value);
   });
 
-  size_t filesize                              = 0;
+  size_t filesize = 0;
   ASSERT_EQ(filesize, getLogDirectorySize(config));
   bool filesize_is_monotonically_increasing = true;
 
