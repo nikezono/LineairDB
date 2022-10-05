@@ -79,6 +79,25 @@ TEST_F(DatabaseTest, ExecuteTransactionWithTemplates) {
                               }});
 }
 
+TEST_F(DatabaseTest, LargeSizeBuffer) {
+  constexpr size_t Size = 2048;
+  LineairDB::Config conf;
+  conf.checkpoint_period    = 1;
+  conf.max_thread           = 1;
+  conf.enable_checkpointing = false;
+
+  std::array<std::byte, Size> alice;
+
+  ::testing::FLAGS_gtest_death_test_style = "threadsafe";
+
+  TestHelper::DoTransactions(
+      db_.get(),
+      {[&](LineairDB::Transaction& tx) { tx.Write("alice", &alice[0], Size); },
+       [&](LineairDB::Transaction& tx) {
+         ASSERT_TRUE(tx.Read<decltype(alice)>("alice").has_value());
+       }});
+}
+
 TEST_F(DatabaseTest, Scan) {
   int alice = 1;
   int bob   = 2;

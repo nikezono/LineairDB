@@ -78,6 +78,27 @@ TEST_F(DurabilityTest, Recovery) {
   }
 }
 
+TEST_F(DurabilityTest, RecoveryLargeObject) {
+  std::string initial_value(4096, 'a');
+  TestHelper::DoTransactions(
+      db_.get(), {[&](LineairDB::Transaction& tx) {
+        tx.Write("alice", reinterpret_cast<std::byte*>(initial_value.data()),
+                 initial_value.size());
+      }});
+  db_->Fence();
+
+  for (size_t i = 0; i < 3; i++) {
+    TestHelper::DoTransactions(db_.get(), {[&](LineairDB::Transaction& tx) {
+                                 auto alice = tx.Read("alice");
+                                 ASSERT_TRUE(alice.first != nullptr);
+                                 std::string current_value(
+                                     reinterpret_cast<const char*>(alice.first),
+                                     alice.second);
+                                 ASSERT_EQ(initial_value, current_value);
+                               }});
+  }
+}
+
 TEST_F(DurabilityTest, RecoveryInContendedWorkload) {
   // We expect LineairDB enables recovery logging by default.
   const LineairDB::Config config = db_->GetConfig();

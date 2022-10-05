@@ -22,6 +22,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <iostream>
+#include <new>
 
 #include "util/logger.hpp"
 
@@ -32,15 +34,28 @@
 namespace LineairDB {
 
 struct DataBuffer {
+  std::byte* value;
+  size_t size;
 
-  std::byte value[LINEAIRDB_DATA_BUFFER_SIZE];
-  size_t size = 0;
+  DataBuffer() : size(0) { value = nullptr; }
+  ~DataBuffer() {
+    if (value != nullptr) delete[] value;
+  }
 
   void Reset(const std::byte* v, const size_t s) {
-    if (LINEAIRDB_DATA_BUFFER_SIZE < s) {
-      SPDLOG_ERROR("write buffer overflow. expected: {0}, capacity: {1}", s,
-                   LINEAIRDB_DATA_BUFFER_SIZE);
-      exit(EXIT_FAILURE);
+    if (v == nullptr){
+      delete[] value;
+      value = nullptr;
+      size = 0;
+    }
+    if (size < s) {
+      if (value == nullptr) {
+        value = new std::byte[s];
+      } else {
+        value = static_cast<decltype(value)>(
+            std::realloc(reinterpret_cast<void*>(value), s));
+        if (value == nullptr) { throw std::bad_alloc(); }
+      }
     }
     size = s;
     std::memcpy(value, v, s);
