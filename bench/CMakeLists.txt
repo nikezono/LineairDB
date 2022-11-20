@@ -19,7 +19,7 @@ file(GLOB_RECURSE SOURCES "ycsb/*.cpp")
 add_executable(ycsb ${SOURCES})
 target_compile_features(ycsb
   PUBLIC
-    cxx_std_17
+    cxx_std_20
     cxx_return_type_deduction
     cxx_rvalue_references)
 target_link_libraries(ycsb ${PROJECT_NAME})

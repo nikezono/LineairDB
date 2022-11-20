@@ -98,11 +98,12 @@ int main(int argc, char** argv) {
   auto index                          = result["index"].as<std::string>();
   config.concurrency_control_protocol = Protocols.find(protocol)->second;
   config.enable_recovery              = false;
+  config.enable_checkpointing         = false;
   config.enable_logging               = result["log"].as<bool>();
   config.max_thread                   = result["thread"].as<size_t>();
   config.epoch_duration_ms            = result["epoch"].as<size_t>();
 
-  if (index == "openbw") {
+  if (index == "OpenBwTree") {
     config.index_structure = decltype(config)::IndexStructure::OpenBwTree;
   }
   LineairDB::Database db(config);
@@ -132,6 +133,18 @@ int main(int argc, char** argv) {
                         rapidjson::Value(workload_type.c_str(), allocator),
                         allocator);
   result_json.AddMember(
+      "contention",
+      rapidjson::Value(std::to_string(workload.zipfian_theta).c_str(),
+                       allocator),
+      allocator);
+  result_json.AddMember(
+      "epoch",
+      rapidjson::Value(std::to_string(config.epoch_duration_ms).c_str(),
+                       allocator),
+      allocator);
+  result_json.AddMember("index", rapidjson::Value(index.c_str(), allocator),
+                        allocator);
+  result_json.AddMember(
       "protocol", rapidjson::Value(protocol.c_str(), allocator), allocator);
   result_json.AddMember("threads", static_cast<uint64_t>(config.max_thread),
                         allocator);
@@ -150,7 +163,16 @@ int main(int argc, char** argv) {
     std::cerr << "Unable to write output file" << output_filename << std::endl;
     exit(1);
   }
-  std::cout << "This benchmark result is saved into " << output_filename
-            << std::endl;
+
+  auto throughput = result_json["tps"].GetInt64();
+  auto etime      = result_json["etime"].GetInt64();
+  auto aborts     = result_json["aborts"].GetInt64();
+  auto commits    = result_json["commits"].GetInt64();
+
+  std::cerr << workload_type << "," << config.epoch_duration_ms << ","
+            << config.max_thread << "," << workload.zipfian_theta << ","
+            << index << "," << protocol << "," << throughput << "," << etime
+            << "," << commits << "," << aborts << std::endl;
+
   return 0;
 }
