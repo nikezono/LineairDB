@@ -34,6 +34,9 @@ ConcurrentTable::ConcurrentTable(EpochFramework& epoch_framework, Config config,
       index_ = std::make_unique<HashTableWithPrecisionLockingIndex<DataItem>>(
           epoch_manager_ref_);
       break;
+    case Config::IndexStructure::OpenBwTree:
+      index_ = std::make_unique<OpenBwTreeIndex<DataItem>>();
+      break;
     default:
       index_ = std::make_unique<HashTableWithPrecisionLockingIndex<DataItem>>(
           epoch_manager_ref_);
@@ -77,7 +80,7 @@ std::optional<size_t> ConcurrentTable::Scan(
 };
 
 std::optional<size_t> ConcurrentTable::Scan(
-    const std::string_view begin, const std::string_view end,
+    const std::string_view begin, const std::optional<std::string_view> end,
     std::function<bool(std::string_view, DataItem&)> operation) {
   return index_->Scan(begin, end, operation);
 };

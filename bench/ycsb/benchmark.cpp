@@ -167,7 +167,6 @@ void ExecuteWorkload(LineairDB::Database& db, Workload& workload,
           if (is_scan) {
             operation(tx, keys.front(), keys.back(), payload,
                       workload.payload_size);
-
           } else {
             for (auto& key : keys) {
               operation(tx, key, "", payload, workload.payload_size);
@@ -222,8 +221,6 @@ rapidjson::Document RunBenchmark(LineairDB::Database& db, Workload& workload,
   for (auto& worker : clients) { worker.join(); }
   auto end = std::chrono::high_resolution_clock::now();
   SPDLOG_INFO("YCSB: Benchmark end.");
-  db.Fence();
-  SPDLOG_INFO("YCSB: DB Fenced.");
 
   uint64_t total_commits = 0;
   uint64_t total_aborts  = 0;

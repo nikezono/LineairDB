@@ -56,17 +56,18 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "^(Apple)?Clang$")
   endif()
 endif()
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_DEBUG} -Ofast")
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -Ofast -ffast-math -DNDEBUG")
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -Ofast -ffast-math -DNDEBUG -DBWTREE_NODEBUG")
 if(APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
   # Apple Sillicon (m1) does not support `march=native`. use `mcpu` instead.
-  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -mcpu=apple-m1")
+  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -mcpu=apple-m1")
 else()
-  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -march=native")
+  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -march=native")
 endif()
 
 # Build as library
 file(GLOB_RECURSE SOURCES "src/*.cpp")
-add_library(${PROJECT_NAME} ${SOURCES})
+set(THIRD_PARTY_OBJECTS third_party/OpenBwTree/src/bwtree.cpp)
+add_library(${PROJECT_NAME} ${SOURCES} ${THIRD_PARTY_OBJECTS})
 add_library(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
 
 find_package(Boost REQUIRED)
@@ -107,6 +108,7 @@ target_include_directories(
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party/rapidjson/include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party/concurrentqueue>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party/OpenBwTree/src>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party/msgpack/include>)
 
 # Export as cmake library

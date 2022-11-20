@@ -23,6 +23,8 @@
 #include <string>
 #include <string_view>
 
+#include "index/index_base.hpp"
+#include "index/open_bw_tree/index.hpp"
 #include "index/precision_locking_index/index.hpp"
 #include "types/data_item.hpp"
 #include "types/definitions.h"
@@ -45,11 +47,11 @@ class ConcurrentTable {
                              const std::optional<std::string_view> end,
                              std::function<bool(std::string_view)> operation);
   std::optional<size_t> Scan(
-      const std::string_view begin, const std::string_view end,
+      const std::string_view begin, const std::optional<std::string_view>,
       std::function<bool(std::string_view, DataItem&)> operation);
 
  private:
-  std::unique_ptr<HashTableWithPrecisionLockingIndex<DataItem>> index_;
+  std::unique_ptr<IndexBase<DataItem>> index_;
   LineairDB::EpochFramework& epoch_manager_ref_;
 };
 }  // namespace Index

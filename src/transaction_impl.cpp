@@ -136,13 +136,26 @@ const std::optional<size_t> Transaction::Impl::Scan(
     std::function<bool(std::string_view,
                        const std::pair<const void*, const size_t>)>
         operation) {
+  std::vector<std::string> result_keys;
   auto result =
       db_pimpl_->GetIndex().Scan(begin, end, [&](std::string_view key) {
         const auto read_result = Read(key);
         if (IsAborted()) return true;
+
+        if (db_pimpl_->GetConfig().index_structure ==
+            Config::IndexStructure::OpenBwTree) {
+          result_keys.emplace_back(std::string(key));
+        }
+
         return operation(key, read_result);
       });
   if (!result.has_value()) { Abort(); }
+
+  if (db_pimpl_->GetConfig().index_structure ==
+      Config::IndexStructure::OpenBwTree) {
+    scan_set_.emplace_back(
+        std::make_tuple(std::string(begin), end, result_keys));
+  }
   return result;
 };
 
@@ -161,6 +174,25 @@ bool Transaction::Impl::Precommit() {
        db_pimpl_->IsNeedToCheckpointing(
            db_pimpl_->epoch_framework_.GetMyThreadLocalEpoch()));
   bool committed = concurrency_control_->Precommit(need_to_checkpoint);
+  if (db_pimpl_->GetConfig().index_structure ==
+      Config::IndexStructure::OpenBwTree) {
+    for (auto& tuple : scan_set_) {
+      size_t j = 0;
+
+      // re-scanning
+      db_pimpl_->GetIndex().Scan(std::get<0>(tuple), std::get<1>(tuple),
+                                 [&](std::string_view key) {
+                                   auto& vec = std::get<2>(tuple);
+                                   if (vec[j] != std::string(key)) {
+                                     committed = false;
+                                     return true;
+                                   }
+                                   j++;
+                                   if (j > scan_set_.size()) return true;
+                                   return false;
+                                 });
+    }
+  }
   return committed;
 }
 

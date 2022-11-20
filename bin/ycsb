@@ -41,8 +41,24 @@ for workload in a b c wo; do
             fi
 
             for times in 1 2 3; do
-                for protocol in Silo SiloNWR; do
+                for protocol in SiloOpenBw Silo SiloNWR; do
                     bench/ycsb -w $workload -c $protocol -t $number_of_thread -q 4 -d 10000 -C 0.$contention -o artifacts/ycsb/json/$(git log -n1 --format=%H | cut -c 1-5)-YCSB-$workload-Contention$contention-Thread$number_of_thread-$times.json
+                done
+            done
+        done
+    done
+done
+
+# Variable Epoch
+for workload in a; do
+    for contention in 3 6 9; do
+        for number_of_epoch in $(seq 1 1000); do
+            if [ $(expr $number_of_thread % 10) != 0 ]; then
+                continue
+            fi
+            for times in 1 2 3; do
+                for protocol in SiloOpenBw Silo SiloNWR; do
+                    bench/ycsb -w $workload -c $protocol -t $1 -q 4 -e $number_of_epoch -d 10000 -C 0.$contention -o artifacts/ycsb/json/$(git log -n1 --format=%H | cut -c 1-5)-YCSB-$workload-Contention$contention-Epoch$number_of_epoch-$times.json
                 done
             done
         done

@@ -30,17 +30,21 @@ namespace LineairDB {
 namespace Index {
 
 template <typename T>
-class HashTableWithPrecisionLockingIndex {
+class HashTableWithPrecisionLockingIndex final : public IndexBase<T> {
  public:
   HashTableWithPrecisionLockingIndex(EpochFramework& e) : range_index_(e) {}
 
-  T* Get(const std::string_view key) { return point_index_.Get(key); }
+  T* Get(const std::string_view key) override final {
+    return point_index_.Get(key);
+  }
 
   /**
    * @note return false if a phantom anomaly has detected.
    */
-  bool Put(const std::string_view key, T&& rhs) { return Put(key, rhs); }
-  bool Put(const std::string_view key, const T& rhs) {
+  bool Put(const std::string_view key, T&& rhs) override final {
+    return Put(key, rhs);
+  }
+  bool Put(const std::string_view key, const T& rhs) override final {
     bool r_success = range_index_.Insert(key);
     if (!r_success) return false;
     auto* value    = new T(rhs);
@@ -49,7 +53,7 @@ class HashTableWithPrecisionLockingIndex {
     return true;
   }
 
-  void ForcePutBlankEntry(const std::string_view key) {
+  void ForcePutBlankEntry(const std::string_view key) override final {
     auto* new_entry = new T();
     if (!point_index_.Put(key, new_entry))
       delete new_entry;  // already inserted
@@ -70,7 +74,7 @@ class HashTableWithPrecisionLockingIndex {
    */
   std::optional<size_t> Scan(
       const std::string_view begin, const std::optional<std::string_view> end,
-      std::function<bool(std::string_view, T&)> operation) {
+      std::function<bool(std::string_view, T&)> operation) override final {
     return Scan(begin, end, [&](std::string_view key) {
       auto* value = Get(key);
       return operation(key, *value);
@@ -81,13 +85,13 @@ class HashTableWithPrecisionLockingIndex {
    * @brief Scan without values; that is, an interface to collect only keys from
    * range index.
    */
-  std::optional<size_t> Scan(const std::string_view begin,
-                             const std::optional<std::string_view> end,
-                             std::function<bool(std::string_view)> operation) {
+  std::optional<size_t> Scan(
+      const std::string_view begin, const std::optional<std::string_view> end,
+      std::function<bool(std::string_view)> operation) override final {
     return range_index_.Scan(begin, end, operation);
   };
 
-  void ForEach(std::function<bool(std::string_view, T&)> f) {
+  void ForEach(std::function<bool(std::string_view, T&)> f) override final {
     point_index_.ForEach(f);
   };
 

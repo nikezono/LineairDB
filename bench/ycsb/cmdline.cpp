@@ -58,6 +58,8 @@ int main(int argc, char** argv) {
        cxxopts::value<double>()->default_value("0.5"))  //
       ("w,workload", "Workload",
        cxxopts::value<std::string>()->default_value("a"))  //
+      ("i,index", "Index",
+       cxxopts::value<std::string>()->default_value("default"))  //
       ("c,cc", "Concurrency control protocol",
        cxxopts::value<std::string>()->default_value("SiloNWR"))  //
       ("l,log", "Enable logging",
@@ -93,11 +95,16 @@ int main(int argc, char** argv) {
   /** Initialize LineairDB **/
   LineairDB::Config config;
   auto protocol                       = result["cc"].as<std::string>();
+  auto index                          = result["index"].as<std::string>();
   config.concurrency_control_protocol = Protocols.find(protocol)->second;
   config.enable_recovery              = false;
   config.enable_logging               = result["log"].as<bool>();
   config.max_thread                   = result["thread"].as<size_t>();
   config.epoch_duration_ms            = result["epoch"].as<size_t>();
+
+  if (index == "openbw") {
+    config.index_structure = decltype(config)::IndexStructure::OpenBwTree;
+  }
   LineairDB::Database db(config);
 
   const auto use_handler = result["handler"].as<bool>();

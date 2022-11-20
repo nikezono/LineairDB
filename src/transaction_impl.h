@@ -87,6 +87,9 @@ class Transaction::Impl {
 
   ReadSetType read_set_;
   WriteSetType write_set_;
+  std::vector<std::tuple<std::string, std::optional<std::string>,
+                         std::vector<std::string>>>
+      scan_set_;
 };
 }  // namespace LineairDB
 #endif /* LINEAIRDB_TRANSACTION_IMPL_H */
