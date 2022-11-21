@@ -1,4 +1,5 @@
 #! /bin/bash
+set -x
 
 #
 #   Copyright (C) 2020 Nippon Telegraph and Telephone Corporation.
@@ -32,17 +33,13 @@ ulimit -c unlimited
 echo "workloads,epoch,threads,contention,index,protocol,tps,etime,commits,aborts" >result.csv
 
 # Variable Thread
-for workload in a b c wo; do
-    for contention in 3 6 9; do
-        for number_of_thread in $(seq 1 $1); do
-            if [[ $number_of_thread == 1] || [$(expr $number_of_thread % 2) == 1 ]]; then
-                continue
-            fi
-
+for workload in a b wo; do
+    for contention in 0 1 2 3 4 5 6 7 8 9 99; do
+        for number_of_thread in 1 $(seq 2 2 $1); do
             for protocol in Silo SiloNWR; do
                 for index in OpenBwTree PLI; do
                     for times in 1; do
-                        bench/ycsb -w $workload -c $protocol -t $number_of_thread -q 4 -i $index -d 1000 -C 0.$contention -o tmp.json 2>>result.csv
+                        bench/ycsb -w $workload -c $protocol -t $number_of_thread -q 4 -i $index -d 1000 -e 1000 -C 0.$contention -o tmp.json 2>>result.csv
                     done
                 done
             done
@@ -52,16 +49,12 @@ done
 
 # Variable Epoch
 for workload in a; do
-    for contention in 3 6 9; do
-        for number_of_epoch in $(seq 1 200); do
-            if [ $(expr $number_of_thread % 10) != 0 ]; then
-                continue
-            fi
-
+    for contention in 3 9; do
+        for number_of_epoch in 1 $(seq 100 100 1000); do
             for protocol in Silo SiloNWR; do
                 for index in OpenBwTree PLI; do
                     for times in 1; do
-                        bench/ycsb -e $number_of_epoch -w $workload -c $protocol -t $0 -q 4 -i $index -d 1000 -C 0.$contention -o tmp.json 2>>result.csv
+                        bench/ycsb -e $number_of_epoch -w $workload -c $protocol -t $1 -q 4 -i $index -d 1000 -C 0.$contention -o tmp.json 2>>result.csv
                     done
                 done
             done

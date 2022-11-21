@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import matplotlib.pyplot as plt
+import sys
+import os
+
+from IPython import embed
+
+df = pd.read_csv(sys.argv[1])
+base_path = os.path.dirname(__file__) + "/../build/artifacts/ycsb/figures"
+
+
+def label_gen(p, i):
+    return f"{p}+{i}"
+
+
+def style(i):
+    return ['+-', 'o-', '.--', 's:'][i]
+
+
+# x-axis thread (1000ms)
+for workload in df.workloads.unique():
+    for contention in df.contention.unique():
+        # if contention not in [0.3, 0.6, 0.9]:
+        #     continue
+        plt.figure()
+        ax = df.plot()
+        ax.cla()
+        cnt = 0
+        for index in df["index"].unique():
+            for protocol in df.protocol.unique():
+                table = df.query(
+                    f'workloads=="{workload}" and epoch==1000 and contention=={contention} and index=="{index}" and protocol=="{protocol}"')
+
+                table.plot(x='threads', y='tps',
+                             label=label_gen(protocol, index),
+                             ax=ax,
+                             style=style(cnt))
+                cnt = cnt + 1
+
+        plt.savefig(
+            f"{base_path}/workload{workload}_contention{contention}_tps.pdf")
+        plt.clf()
+        plt.close('all')
+
+# x-axis contention
+for workload in df.workloads.unique():
+    plt.figure()
+    ax = df.plot()
+    ax.cla()
+    cnt = 0
+    for index in df["index"].unique():
+        for protocol in df.protocol.unique():
+            table = df.query(
+                f'workloads=="{workload}" and epoch==1000 and threads=={df.threads.max()} and index=="{index}" and protocol=="{protocol}"')
+            table.plot(x='contention', y='tps',
+                         xlim=[0.0, 1.0],
+                         label=label_gen(protocol, index),
+                         ax=ax,
+                         style=style(cnt))
+            cnt = cnt + 1
+    embed()
+    plt.savefig(
+        f"{base_path}/workload{workload}_contention.pdf")
+    plt.clf()
+    plt.close('all')
+
+# x-axis epoch
+for workload in df.workloads.unique():
+    for contention in df.contention.unique():
+        plt.figure()
+        ax = df.plot()
+        ax.cla()
+        cnt = 0
+        for index in df["index"].unique():
+            for protocol in df.protocol.unique():
+                table = df.query(
+                    f'workloads=="{workload}" and threads=={df.threads.max()}  and contention=={contention} and index=="{index}" and protocol=="{protocol}"')
+
+                table.plot(x='epoch', y='tps',
+                             xlim=[0, 1000],
+                             label=label_gen(protocol, index),
+                             ax=ax,
+                             style=style(cnt))
+                cnt = cnt + 1
+
+        plt.savefig(
+            f"{base_path}/workload{workload}_contention{contention}_epoch.pdf")
+        plt.clf()
+        plt.close('all')
