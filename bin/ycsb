@@ -39,7 +39,7 @@ for workload in a b wo; do
             for protocol in Silo SiloNWR; do
                 for index in OpenBwTree PLI; do
                     for times in 1; do
-                        bench/ycsb -w $workload -c $protocol -t $number_of_thread -q 4 -i $index -d 1000 -e 1000 -C 0.$contention -o tmp.json 2>>result.csv
+                        bench/ycsb -H false -w $workload -c $protocol -t $number_of_thread -q 4 -i $index -d 1000 -e 1000 -C 0.$contention -o tmp.json 2>>result.csv
                     done
                 done
             done
@@ -54,7 +54,7 @@ for workload in a; do
             for protocol in Silo SiloNWR; do
                 for index in OpenBwTree PLI; do
                     for times in 1; do
-                        bench/ycsb -e $number_of_epoch -w $workload -c $protocol -t $1 -q 4 -i $index -d 1000 -C 0.$contention -o tmp.json 2>>result.csv
+                        bench/ycsb -H false -e $number_of_epoch -w $workload -c $protocol -t $1 -q 4 -i $index -d 1000 -C 0.$contention -o tmp.json 2>>result.csv
                     done
                 done
             done

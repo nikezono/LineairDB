@@ -33,10 +33,12 @@ for workload in df.workloads.unique():
                 table = df.query(
                     f'workloads=="{workload}" and epoch==1000 and contention=={contention} and index=="{index}" and protocol=="{protocol}"')
 
-                table.plot(x='threads', y='tps',
-                             label=label_gen(protocol, index),
-                             ax=ax,
-                             style=style(cnt))
+                mean = table.groupby(
+                    ["index", "protocol", "threads"], as_index=False).mean()
+                mean.plot(x='threads', y='tps',
+                          label=label_gen(protocol, index),
+                          ax=ax,
+                          style=style(cnt))
                 cnt = cnt + 1
 
         plt.savefig(
@@ -54,38 +56,39 @@ for workload in df.workloads.unique():
         for protocol in df.protocol.unique():
             table = df.query(
                 f'workloads=="{workload}" and epoch==1000 and threads=={df.threads.max()} and index=="{index}" and protocol=="{protocol}"')
-            table.plot(x='contention', y='tps',
-                         xlim=[0.0, 1.0],
-                         label=label_gen(protocol, index),
-                         ax=ax,
-                         style=style(cnt))
+            line = table.groupby(
+                ["index", "protocol", "contention"], as_index=False).mean()
+            line.plot(x='contention', y='tps',
+                      xlim=[0.0, 1.0],
+                      label=label_gen(protocol, index),
+                      ax=ax,
+                      style=style(cnt))
             cnt = cnt + 1
-    embed()
     plt.savefig(
         f"{base_path}/workload{workload}_contention.pdf")
     plt.clf()
     plt.close('all')
 
 # x-axis epoch
-for workload in df.workloads.unique():
-    for contention in df.contention.unique():
-        plt.figure()
-        ax = df.plot()
-        ax.cla()
-        cnt = 0
-        for index in df["index"].unique():
-            for protocol in df.protocol.unique():
-                table = df.query(
-                    f'workloads=="{workload}" and threads=={df.threads.max()}  and contention=={contention} and index=="{index}" and protocol=="{protocol}"')
+for contention in [0.3, 0.9]:
+    plt.figure()
+    ax = df.plot()
+    ax.cla()
+    cnt = 0
+    for index in df["index"].unique():
+        for protocol in df.protocol.unique():
+            table = df.query(
+                f'workloads=="a" and threads=={df.threads.max()}  and contention=={contention} and index=="{index}" and protocol=="{protocol}"')
+            line = table.groupby(
+                ["index", "protocol", "epoch"], as_index=False).mean()
+            line.plot(x='epoch', y='tps',
+                        xlim=[0, 1000],
+                        label=label_gen(protocol, index),
+                        ax=ax,
+                        style=style(cnt))
+            cnt = cnt + 1
 
-                table.plot(x='epoch', y='tps',
-                             xlim=[0, 1000],
-                             label=label_gen(protocol, index),
-                             ax=ax,
-                             style=style(cnt))
-                cnt = cnt + 1
-
-        plt.savefig(
-            f"{base_path}/workload{workload}_contention{contention}_epoch.pdf")
-        plt.clf()
-        plt.close('all')
+    plt.savefig(
+        f"{base_path}/workload{workload}_contention{contention}_epoch.pdf")
+    plt.clf()
+    plt.close('all')
