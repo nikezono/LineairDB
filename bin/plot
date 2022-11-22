@@ -22,20 +22,24 @@ def style(i):
 # x-axis thread (1000ms)
 for workload in df.workloads.unique():
     for contention in df.contention.unique():
-        # if contention not in [0.3, 0.6, 0.9]:
-        #     continue
+        if contention not in [0.3, 0.9]:
+            continue
         plt.figure()
         ax = df.plot()
         ax.cla()
         cnt = 0
         for index in df["index"].unique():
             for protocol in df.protocol.unique():
+                if protocol == "SiloNWR" and index == "OpenBwTree":
+                    continue
                 table = df.query(
                     f'workloads=="{workload}" and epoch==1000 and contention=={contention} and index=="{index}" and protocol=="{protocol}"')
 
                 mean = table.groupby(
                     ["index", "protocol", "threads"], as_index=False).mean()
+                embed()
                 mean.plot(x='threads', y='tps',
+                          xlim=[0, df.threads.max()],
                           label=label_gen(protocol, index),
                           ax=ax,
                           style=style(cnt))
@@ -54,6 +58,8 @@ for workload in df.workloads.unique():
     cnt = 0
     for index in df["index"].unique():
         for protocol in df.protocol.unique():
+            if protocol == "SiloNWR" and index == "OpenBwTree":
+                continue
             table = df.query(
                 f'workloads=="{workload}" and epoch==1000 and threads=={df.threads.max()} and index=="{index}" and protocol=="{protocol}"')
             line = table.groupby(
@@ -77,6 +83,8 @@ for contention in [0.3, 0.9]:
     cnt = 0
     for index in df["index"].unique():
         for protocol in df.protocol.unique():
+            if protocol == "SiloNWR" and index == "OpenBwTree":
+                continue
             table = df.query(
                 f'workloads=="a" and threads=={df.threads.max()}  and contention=={contention} and index=="{index}" and protocol=="{protocol}"')
             line = table.groupby(

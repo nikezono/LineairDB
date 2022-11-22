@@ -169,10 +169,13 @@ int main(int argc, char** argv) {
   auto aborts     = result_json["aborts"].GetInt64();
   auto commits    = result_json["commits"].GetInt64();
 
+  size_t threads =
+      use_handler ? workload.client_thread_size : config.max_thread;
+
   std::cerr << workload_type << "," << config.epoch_duration_ms << ","
-            << config.max_thread << "," << workload.zipfian_theta << ","
-            << index << "," << protocol << "," << throughput << "," << etime
-            << "," << commits << "," << aborts << std::endl;
+            << threads << "," << workload.zipfian_theta << "," << index << ","
+            << protocol << "," << throughput << "," << etime << "," << commits
+            << "," << aborts << std::endl;
 
   return 0;
 }
