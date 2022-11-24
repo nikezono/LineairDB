@@ -94,18 +94,15 @@ class OpenBwTreeIndex final : public IndexBase<T> {
     size_t hit = 0;
     auto it    = bwtree_.Begin(b);
     for (;;) {
-      if (it.IsEnd() == false && b <= it->first) {
-        if (!end.has_value() || it->first < e) {
-          hit++;
-          auto cancel = operation(it->first, *it->second);
-          if (cancel) break;
-          it++;
-        }
+      if (it.IsEnd() == false && b <= it->first && it->first < e) {
+        hit++;
+        auto cancel = operation(it->first, *it->second);
+        if (cancel) break;
+        it++;
       } else {
         break;
       }
     }
-    return hit;
   }
 
   void ForEach(std::function<bool(std::string_view, T&)> f) override final {
