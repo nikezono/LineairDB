@@ -53,7 +53,7 @@ struct Result {
 template <typename T>
 Result Benchmark(T& index, std::string benchmark_type, std::string structure,
                  size_t threads, size_t proportion, bool populated,
-                 size_t duration, size_t logic_time) {
+                 size_t duration, size_t logic_time, size_t limit) {
   std::atomic<size_t> count_down_latch(0);
   std::atomic<bool> end_flag(false);
   std::atomic<size_t> total_succeed(0);
@@ -115,7 +115,7 @@ Result Benchmark(T& index, std::string benchmark_type, std::string structure,
           if (structure == "PLI" || structure == "OpenBw+PLI") {
             auto result = index.Scan(begin, end, [&](auto key) {
               hit++;
-              if (100 <= hit) {
+              if (limit <= hit) {
                 last_key = key;
                 return true;
               }
@@ -133,7 +133,7 @@ Result Benchmark(T& index, std::string benchmark_type, std::string structure,
           } else if (structure == "OPLI" || structure == "OpenBw+OPLI") {
             auto result = index.Scan(begin, end, [&](auto key) {
               hit++;
-              if (100 <= hit) {
+              if (limit <= hit) {
                 last_key = key;
                 return true;
               }
@@ -158,7 +158,7 @@ Result Benchmark(T& index, std::string benchmark_type, std::string structure,
             index.Scan(begin, end, [&](auto key) {
               hit++;
               hit_keys.emplace(key);
-              if (100 <= hit) {
+              if (limit <= hit) {
                 last_key = key;
                 return true;
               }
@@ -263,6 +263,8 @@ int main(int argc, char** argv) {
       ("d,duration", "Measurement duration of this benchmark (milliseconds)",
        cxxopts::value<size_t>()->default_value("2000"))  //
       ("l,logic_time", "Duration of each transactions (milliseconds)",
+       cxxopts::value<size_t>()->default_value("100"))  //
+      ("L,limit", "Number of the limit of scan operations",
        cxxopts::value<size_t>()->default_value("0"))  //
       ("o,output", "Output JSON filename",
        cxxopts::value<std::string>()->default_value(
@@ -282,6 +284,7 @@ int main(int argc, char** argv) {
   const auto populated            = result["populated"].as<bool>();
   const auto structure            = result["structure"].as<std::string>();
   const auto logic_time           = result["logic_time"].as<size_t>();
+  const auto limit                = result["limit"].as<size_t>();
 
   /** run benchmark **/
   double ops           = 0;
@@ -321,9 +324,9 @@ int main(int argc, char** argv) {
       SPDLOG_INFO("IndexBench: population has finished.");
     }
 
-    auto res      = Benchmark<decltype(index)>(index, benchmark_type, structure,
-                                          threads, proportion, populated,
-                                          measurement_duration, logic_time);
+    auto res = Benchmark<decltype(index)>(
+        index, benchmark_type, structure, threads, proportion, populated,
+        measurement_duration, logic_time, limit);
     ops           = res.cps;
     insert_aborts = res.insert_aborts;
     scan_aborts   = res.scan_aborts;
