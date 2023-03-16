@@ -1,0 +1,6 @@
+#! /bin/bash -x -e
+
+mkdir -p  $(dirname $0)/../build; cd $_;
+
+cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release
+ninja

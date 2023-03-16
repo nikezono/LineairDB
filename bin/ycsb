@@ -33,7 +33,7 @@ ulimit -c unlimited
 echo "workloads,epoch,threads,contention,index,protocol,tps,etime,commits,aborts" >result.csv
 
 # Variable Thread
-for workload in a b wo; do
+for workload in a b c e f wo; do
     for contention in 0 1 2 3 4 5 6 7 8 9 99; do
         for number_of_thread in 1 $(seq 2 2 $1); do
             for protocol in Silo SiloNWR; do
@@ -49,7 +49,7 @@ for workload in a b wo; do
 done
 
 # Variable Contention
-for workload in a b wo; do
+for workload in a b c e f wo; do
     for contention in 0 1 2 3 4 5 6 7 8 9 99; do
         for protocol in Silo SiloNWR; do
             for index in OpenBwTree PLI; do
@@ -62,7 +62,7 @@ for workload in a b wo; do
 done
 
 # Variable Epoch
-for workload in a; do
+for workload in a b c e f; do
     for contention in 3 9; do
         for number_of_epoch in 1 $(seq 100 100 1000); do
             for protocol in Silo SiloNWR; do
