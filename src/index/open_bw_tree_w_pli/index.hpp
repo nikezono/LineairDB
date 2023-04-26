@@ -163,7 +163,6 @@ class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
   std::optional<size_t> Scan(
       const std::string_view b, const std::string_view e,
       std::function<bool(std::string_view)> operation) override final {
-    size_t hit       = 0;
     const auto begin = std::string(b);
     const auto end   = std::string(e);
     if (end < begin) return std::nullopt;
