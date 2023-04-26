@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import matplotlib.pyplot as plt
+import sys
+import os
+
+from IPython import embed
+
+df = pd.read_csv(sys.argv[1])
+base_path = os.path.dirname(__file__) + "/../build/artifacts/ycsb/figures"
+
+
+def label_gen(p, i):
+    if p == "Silo" and i == "OpenBwTree":
+        return "Baseline"
+    if p == "SiloNWR" and i == "OpenBwTree":
+        return "+NWR"
+    if p == "SiloNWR" and i == "PLI":
+        return "+NWR,PLI"
+
+
+def style(i):
+    return ['+-', 'o-', '.--', 's:'][i]
+
+
+# x-axis thread (1000ms)
+for workload in df.workloads.unique():
+    for contention in df.contention.unique():
+        if contention not in [0.3, 0.9]:
+            continue
+        plt.figure()
+        ax = df.plot()
+        ax.cla()
+        cnt = 0
+        for index in df["index"].unique():
+            for protocol in df.protocol.unique():
+                if protocol == "Silo" and index == "PLI":
+                    continue
+                table = df.query(
+                    f'workloads=="{workload}" and epoch==1000 and contention=={contention} and index=="{index}" and protocol=="{protocol}"')
+
+                mean = table.groupby(
+                    ["index", "protocol", "threads"], as_index=False).mean()
+                mean.plot(x='threads', y='tps',
+                          xlim=[0, df.threads.max()],
+                          label=label_gen(protocol, index),
+                          ax=ax,
+                          style=style(cnt))
+                cnt = cnt + 1
+
+        plt.savefig(
+            f"{base_path}/workload{workload}_contention{contention}_tps.pdf")
+        plt.clf()
+        plt.close('all')
+
+# x-axis contention
+for workload in df.workloads.unique():
+    plt.figure()
+    ax = df.plot()
+    ax.cla()
+    cnt = 0
+    for index in df["index"].unique():
+        for protocol in df.protocol.unique():
+            if protocol == "Silo" and index == "PLI":
+                continue
+            table = df.query(
+                f'workloads=="{workload}" and epoch==1000 and threads=={df.threads.max()} and index=="{index}" and protocol=="{protocol}"')
+            line = table.groupby(
+                ["index", "protocol", "contention"], as_index=False).mean()
+            line.plot(x='contention', y='tps',
+                      xlim=[0.0, 1.0],
+                      label=label_gen(protocol, index),
+                      ax=ax,
+                      style=style(cnt))
+            cnt = cnt + 1
+    plt.savefig(
+        f"{base_path}/workload{workload}_contention.pdf")
+    plt.clf()
+    plt.close('all')
+
+# x-axis epoch
+for contention in [0.3, 0.9]:
+    plt.figure()
+    ax = df.plot()
+    ax.cla()
+    cnt = 0
+    for index in df["index"].unique():
+        for protocol in df.protocol.unique():
+            if protocol == "Silo" and index == "PLI":
+                continue
+            table = df.query(
+                f'workloads=="a" and threads=={df.threads.max()}  and contention=={contention} and index=="{index}" and protocol=="{protocol}"')
+            line = table.groupby(
+                ["index", "protocol", "epoch"], as_index=False).mean()
+            line.plot(x='epoch', y='tps',
+                        xlim=[0, 1000],
+                        label=label_gen(protocol, index),
+                        ax=ax,
+                        style=style(cnt))
+            cnt = cnt + 1
+
+    plt.savefig(
+        f"{base_path}/workload{workload}_contention{contention}_epoch.pdf")
+    plt.clf()
+    plt.close('all')
