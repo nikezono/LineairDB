@@ -19,6 +19,7 @@
 #include <functional>
 
 #include "index/open_bw_tree/index.hpp"
+#include "index/open_bw_tree_w_pli/index.hpp"
 #include "index/precision_locking_index/index.hpp"
 #include "lineairdb/config.h"
 #include "types/data_item.hpp"
@@ -27,15 +28,27 @@
 namespace LineairDB {
 namespace Index {
 
-ConcurrentTable::ConcurrentTable(EpochFramework& epoch_framework, Config config,
-                                 WriteSetType recovery_set)
-    : epoch_manager_ref_(epoch_framework) {
+ConcurrentTable::ConcurrentTable(Config config, WriteSetType recovery_set) {
   switch (config.index_structure) {
     case Config::IndexStructure::HashTableWithPrecisionLockingIndex:
-      index_ = std::make_unique<HashTableWithPrecisionLockingIndex<DataItem>>(
-          epoch_manager_ref_);
+      index_ = std::make_unique<
+          HashTableWithPrecisionLockingIndex<DataItem, Option::Pessimistic>>();
+      break;
+    case Config::IndexStructure::HashTableWithOptimisticPrecisionLockingIndex:
+      index_ = std::make_unique<
+          HashTableWithPrecisionLockingIndex<DataItem, Option::Optimistic>>();
       break;
     case Config::IndexStructure::OpenBwTree:
+      index_ = std::make_unique<OpenBwTreeIndex<DataItem>>();
+      break;
+    case Config::IndexStructure::OpenBwTreeWithPLI:
+      index_ = std::make_unique<OpenBwTreeWithPrecisionLockingIndex<
+          DataItem, BwOption::Pessimistic>>();
+      break;
+    case Config::IndexStructure::OpenBwTreeWithOPLI:
+      index_ = std::make_unique<OpenBwTreeWithPrecisionLockingIndex<
+          DataItem, BwOption::Optimistic>>();
+      break;
     default:
       index_ = std::make_unique<OpenBwTreeIndex<DataItem>>();
       break;
@@ -81,6 +94,11 @@ std::optional<size_t> ConcurrentTable::Scan(
     const std::string_view begin, const std::string_view end,
     std::function<bool(std::string_view, DataItem&)> operation) {
   return index_->Scan(begin, end, operation);
+};
+
+bool ConcurrentTable::ReScan(const std::string_view begin,
+                             const std::string_view end) {
+  return index_->ReScan(begin, end);
 };
 
 }  // namespace Index

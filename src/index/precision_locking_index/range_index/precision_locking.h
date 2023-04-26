@@ -26,7 +26,7 @@
 #include <string_view>
 
 #include "types/definitions.h"
-#include "util/epoch_framework.hpp"
+#include "util/lockfree_list.hpp"
 
 namespace LineairDB {
 namespace Index {
@@ -50,22 +50,10 @@ namespace Index {
  * @ref [1] https://dl.acm.org/doi/pdf/10.1145/582318.582340
  *
  */
+
+enum class Option { Optimistic, Pessimistic };
+template <Option OPT = Option::Optimistic>
 class PrecisionLockingIndex {
- public:
-  PrecisionLockingIndex(LineairDB::EpochFramework&);
-  ~PrecisionLockingIndex();
-  std::optional<size_t> Scan(const std::string_view begin,
-                             const std::string_view end,
-                             std::function<bool(std::string_view)> operation);
-  bool Insert(const std::string_view key);
-  void ForceInsert(const std::string_view key);
-  bool Delete(const std::string_view key);
-
- private:
-  bool IsInPredicateSet(const std::string_view);
-  bool IsOverlapWithInsertOrDelete(const std::string_view,
-                                   const std::string_view);
-
   struct Predicate {
     std::string begin;
     std::string end;
@@ -83,21 +71,147 @@ class PrecisionLockingIndex {
     bool is_deleted;
   };
 
-  using PredicateList = std::map<EpochNumber, std::vector<Predicate>>;
-  using InsertOrDeleteKeySet =
-      std::map<EpochNumber, std::vector<InsertOrDeleteEvent>>;
+  using PredicateList            = Util::LockfreeList<Predicate>;
+  using InsertOrDeleteKeySet     = Util::LockfreeList<InsertOrDeleteEvent>;
   using ROWEXRangeIndexContainer = std::map<std::string, IndexItem>;
 
-  PredicateList predicate_list_;
-  std::shared_mutex plock_;
-  InsertOrDeleteKeySet insert_or_delete_key_set_;
-  std::shared_mutex ulock_;
-  ROWEXRangeIndexContainer container_;
-  std::atomic<bool> something_inserted_;
-  EpochFramework& epoch_manager_ref_;
+ public:
+  PrecisionLockingIndex();
+  ~PrecisionLockingIndex();
+  std::optional<size_t> Scan(const std::string_view begin,
+                             const std::string_view end,
+                             std::function<bool(std::string_view)> operation);
+  bool Insert(const std::string_view key);
+  void ForceInsert(const std::string_view key);
+  bool Delete(const std::string_view key);
+
+  bool IsInPredicateSet(const std::string_view);
+  bool IsOverlapWithInsertOrDelete(const std::string_view,
+                                   const std::string_view,
+                                   bool lock_required = false);
+
+ private:
   std::atomic<bool> manager_stop_flag_;
   std::thread manager_;
+
+  std::shared_mutex container_lock_;  // WANTFIX remove this locking
+  PredicateList predicate_list_;
+  InsertOrDeleteKeySet insert_or_delete_key_set_;
+
+  ROWEXRangeIndexContainer container_;
 };
+
+/** Impl **/
+
+template <Option OPT>
+PrecisionLockingIndex<OPT>::PrecisionLockingIndex()
+    : manager_stop_flag_(false), manager_([&]() {
+        while (manager_stop_flag_.load() != true) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(40));
+
+          std::lock_guard<decltype(container_lock_)> lock(container_lock_);
+
+          // Clear predicate list
+          if constexpr (OPT == Option::Pessimistic) { predicate_list_.Clear(); }
+
+          // Before deleting, we update the index container to apply
+          // insertions and deletions.
+          {
+            insert_or_delete_key_set_.Every([&](const auto& event) {
+              container_[event.key].is_deleted = event.is_delete_event;
+              return true;
+            });
+          }
+          // Clear insert_or_delete_keys
+          insert_or_delete_key_set_.Clear();
+        }
+      }) {}
+
+template <Option OPT>
+PrecisionLockingIndex<OPT>::~PrecisionLockingIndex() {
+  manager_stop_flag_.store(true);
+  manager_.join();
+};
+
+template <Option OPT>
+std::optional<size_t> PrecisionLockingIndex<OPT>::Scan(
+    const std::string_view b, const std::string_view e,
+    std::function<bool(std::string_view)> operation) {
+  size_t hit       = 0;
+  const auto begin = std::string(b);
+  const auto end   = std::string(e);
+  if (end < begin) return std::nullopt;
+
+  std::shared_lock<decltype(container_lock_)> lk(container_lock_);
+
+  if (IsOverlapWithInsertOrDelete(b, e)) { return std::nullopt; }
+  if constexpr (OPT == Option::Pessimistic) {
+    predicate_list_.Add({b, e});
+    if (IsOverlapWithInsertOrDelete(b, e)) { return std::nullopt; }
+  }
+
+  {
+    auto it     = container_.lower_bound(begin);
+    auto it_end = container_.upper_bound(end);
+    for (; it != it_end; it++) {
+      if (it->second.is_deleted) continue;
+      hit++;
+      auto cancel = operation(it->first);
+      if (cancel) break;
+    }
+  }
+  return hit;
+};
+
+template <Option OPT>
+bool PrecisionLockingIndex<OPT>::Insert(const std::string_view key) {
+  std::shared_lock<decltype(container_lock_)> lk(container_lock_);
+
+  if (IsInPredicateSet(key)) { return false; }
+  insert_or_delete_key_set_.Add({key, false});
+  if (IsInPredicateSet(key)) { return false; }
+  return true;
+};
+
+template <Option OPT>
+void PrecisionLockingIndex<OPT>::ForceInsert(const std::string_view key) {
+  insert_or_delete_key_set_.Add({key, false});
+}
+
+template <Option OPT>
+bool PrecisionLockingIndex<OPT>::Delete(const std::string_view key) {
+  std::shared_lock<decltype(container_lock_)> lk(container_lock_);
+
+  if (IsInPredicateSet(key)) { return false; }
+  insert_or_delete_key_set_.Add({key, true});
+  if (IsInPredicateSet(key)) { return false; }
+  return true;
+};
+
+template <Option OPT>
+bool PrecisionLockingIndex<OPT>::IsInPredicateSet(const std::string_view key) {
+  if constexpr (OPT == Option::Optimistic) return false;
+
+  return !predicate_list_.Every([&](const auto& predicate) {
+    return (key < predicate.begin || predicate.end < key);
+  });
+}
+
+template <Option OPT>
+bool PrecisionLockingIndex<OPT>::IsOverlapWithInsertOrDelete(
+    const std::string_view begin, const std::string_view end,
+    bool lock_required) {
+  if (lock_required) {
+    std::shared_lock<decltype(container_lock_)> lk(container_lock_);
+    return !insert_or_delete_key_set_.Every([&](const auto& event) {
+      return (event.key < begin || end < event.key);
+    });
+  }
+  return !insert_or_delete_key_set_.Every([&](const auto& event) {
+    return (event.key < begin || end < event.key);
+  });
+}
+
 }  // namespace Index
 }  // namespace LineairDB
 

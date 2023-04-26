@@ -34,7 +34,7 @@ namespace Index {
 
 class ConcurrentTable {
  public:
-  ConcurrentTable(EpochFramework& epoch_framework, Config config = Config(),
+  ConcurrentTable(Config config             = Config(),
                   WriteSetType recovery_set = WriteSetType());
 
   DataItem* Get(const std::string_view key);
@@ -47,10 +47,10 @@ class ConcurrentTable {
   std::optional<size_t> Scan(
       const std::string_view begin, const std::string_view end,
       std::function<bool(std::string_view, DataItem&)> operation);
+  bool ReScan(const std::string_view begin, const std::string_view end);
 
  private:
   std::unique_ptr<IndexBase<DataItem>> index_;
-  LineairDB::EpochFramework& epoch_manager_ref_;
 };
 }  // namespace Index
 }  // namespace LineairDB

@@ -26,12 +26,12 @@
 #include <iostream>
 #include <random>
 #include <thread>
+#include <unordered_set>
 #include <variant>
 
 #include "index/concurrent_table.h"
 #include "lineairdb/config.h"
 #include "spdlog/spdlog.h"
-#include "util/epoch_framework.hpp"
 
 const std::string CHARACTERS =
     "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -39,13 +39,10 @@ const std::string CHARACTERS =
 constexpr auto PopulationSize = 100000;
 
 template <typename T>
-void Population(T& index, LineairDB::EpochFramework& epoch_f) {
-  epoch_f.MakeMeOnline();
+void Population(T& index) {
   for (auto i = 0; i < PopulationSize; i++) {
     index.GetOrInsert(std::to_string(i));
   }
-  epoch_f.MakeMeOffline();
-  epoch_f.Sync();
 }
 struct Result {
   double cps           = 0;
@@ -55,8 +52,8 @@ struct Result {
 
 template <typename T>
 Result Benchmark(T& index, std::string benchmark_type, std::string structure,
-                 LineairDB::EpochFramework& epoch_f, size_t threads,
-                 size_t proportion, bool populated, size_t duration) {
+                 size_t threads, size_t proportion, bool populated,
+                 size_t duration, size_t logic_time, size_t limit) {
   std::atomic<size_t> count_down_latch(0);
   std::atomic<bool> end_flag(false);
   std::atomic<size_t> total_succeed(0);
@@ -86,7 +83,6 @@ Result Benchmark(T& index, std::string benchmark_type, std::string structure,
           total_insert_aborts.fetch_add(operation_insert_aborts);
           break;
         };
-        epoch_f.MakeMeOnline();
 
         const auto r                 = static_cast<size_t>(dist(engine));
         const bool is_scan_operation = r < proportion;
@@ -97,9 +93,11 @@ Result Benchmark(T& index, std::string benchmark_type, std::string structure,
           for (;;) {
             if (populated) {
               auto b = dist_for_populated(engine);
+              if (PopulationSize <= b) b = PopulationSize - 1;
               begin  = std::to_string(b);
               auto e = b + dist(engine);
-              end    = std::to_string(e);
+              if (PopulationSize <= e) e = PopulationSize - 1;
+              end = std::to_string(e);
             } else {
               for (auto i = 0; i < 5; i++) {
                 begin += CHARACTERS[random_string(engine)];
@@ -112,52 +110,113 @@ Result Benchmark(T& index, std::string benchmark_type, std::string structure,
             end.clear();
           }
 
-          size_t hit  = 0;
+          size_t hit    = 0;
           auto last_key = end;
-          auto result = index.Scan(begin, end, [&](auto key) {
-            hit++;
-            if (100 <= hit) {
-              last_key = key;
-              return true;
+          if (structure == "PLI" || structure == "OpenBw+PLI") {
+            auto result = index.Scan(begin, end, [&](auto key) {
+              hit++;
+              if (limit <= hit) {
+                last_key = key;
+                return true;
+              }
+              return false;
+            });
+            if (0 < logic_time) {
+              std::this_thread::sleep_for(
+                  std::chrono::milliseconds(logic_time));
             }
-            return false;
-          });
-
-          if (result.has_value()) {
-            if (structure == "PrecisionLocking") {
+            if (result.has_value()) {
               operation_succeed++;
             } else {
-              std::this_thread::sleep_for(std::chrono::microseconds(1));
-              auto result_after =
-                  index.Scan(begin, last_key, [&](auto) { return false; });
-              if (result_after.has_value() &&
-                  result_after.value() == result.value()) {
+              operation_scan_aborts++;
+            }
+          } else if (structure == "OPLI" || structure == "OpenBw+OPLI") {
+            auto result = index.Scan(begin, end, [&](auto key) {
+              hit++;
+              if (limit <= hit) {
+                last_key = key;
+                return true;
+              }
+              return false;
+            });
+            if (0 < logic_time) {
+              std::this_thread::sleep_for(
+                  std::chrono::milliseconds(logic_time));
+            }
+            if (result.has_value()) {
+              if (index.ReScan(begin, last_key)) {
                 operation_succeed++;
               } else {
                 operation_scan_aborts++;
               }
+            } else {
+              operation_scan_aborts++;
+            }
+
+          } else if (structure == "OpenBwTree") {
+            std::unordered_set<decltype(begin)> hit_keys;
+            index.Scan(begin, end, [&](auto key) {
+              hit++;
+              hit_keys.emplace(key);
+              if (limit <= hit) {
+                last_key = key;
+                return true;
+              }
+              return false;
+            });
+
+            if (0 < logic_time) {
+              std::this_thread::sleep_for(
+                  std::chrono::milliseconds(logic_time));
+            }
+
+            // Fence;
+            bool phantom = false;
+            index.Scan(begin, last_key, [&](auto key) {
+              if (hit_keys.count(std::string(key)) == 0) {
+                phantom = true;
+                return true;
+              }
+              return false;
+            });
+
+            if (!phantom) {
+              operation_succeed++;
+            } else {
+              operation_scan_aborts++;
             }
           } else {
-            operation_scan_aborts++;
+            exit(EXIT_FAILURE);
           }
 
         } else {
           std::string key;
           if (populated) {
-            key = std::to_string(dist_for_populated(engine));
+            auto i = dist_for_populated(engine);
+            if (PopulationSize <= i) i = PopulationSize - 1;
+            key = std::to_string(i);
+
           } else {
             for (auto i = 0; i < 5; i++) {
               key += CHARACTERS[random_string(engine)];
             }
           }
-          bool success = index.GetOrInsert(key);
+
+          bool success = true;
+          auto* item   = index.Get(key);
+          if (item == nullptr) {
+            if (populated) {
+              SPDLOG_ERROR("Populated but not exist {}", key);
+              exit(EXIT_FAILURE);
+            }
+            success = index.Put(key, {});
+          }
           if (success) {
             operation_succeed++;
           } else {
-            operation_insert_aborts++;
+            if (!populated) operation_insert_aborts++;
           }
         }
-        epoch_f.MakeMeOffline();
       }
     }));
   }
@@ -196,13 +255,17 @@ int main(int argc, char** argv) {
       ("T,type", "Type of benchmark",
        cxxopts::value<std::string>()->default_value("scan"))  //
       ("s,structure", "Index data structure",
-       cxxopts::value<std::string>()->default_value("PrecisionLocking"))  //
+       cxxopts::value<std::string>()->default_value("PLI"))  //
       ("p,proportion", "Proportion of 'scan' operation",
        cxxopts::value<size_t>()->default_value("10"))  //
       ("P,populated", "All data items are populated before benchmarking",
        cxxopts::value<bool>()->default_value("false"))  //
       ("d,duration", "Measurement duration of this benchmark (milliseconds)",
        cxxopts::value<size_t>()->default_value("2000"))  //
+      ("l,logic_time", "Duration of each transactions (milliseconds)",
+       cxxopts::value<size_t>()->default_value("100"))  //
+      ("L,limit", "Number of the limit of scan operations",
+       cxxopts::value<size_t>()->default_value("0"))  //
       ("o,output", "Output JSON filename",
        cxxopts::value<std::string>()->default_value(
            "indexbench_result.json"))  //
@@ -220,6 +283,8 @@ int main(int argc, char** argv) {
   const auto proportion           = result["proportion"].as<size_t>();
   const auto populated            = result["populated"].as<bool>();
   const auto structure            = result["structure"].as<std::string>();
+  const auto logic_time           = result["logic_time"].as<size_t>();
+  const auto limit                = result["limit"].as<size_t>();
 
   /** run benchmark **/
   double ops           = 0;
@@ -231,30 +296,37 @@ int main(int argc, char** argv) {
   {
     using namespace LineairDB::Index;
 
-    LineairDB::EpochFramework epoch_framework;
-    epoch_framework.Start();
     LineairDB::Config config;
-    if (structure == "PrecisionLocking") {
+    if (structure == "PLI") {
       config.index_structure =
           decltype(config)::IndexStructure::HashTableWithPrecisionLockingIndex;
+    } else if (structure == "OPLI") {
+      config.index_structure = decltype(config)::IndexStructure::
+          HashTableWithOptimisticPrecisionLockingIndex;
     } else if (structure == "OpenBwTree") {
       config.index_structure = decltype(config)::IndexStructure::OpenBwTree;
+    } else if (structure == "OpenBw+PLI") {
+      config.index_structure =
+          decltype(config)::IndexStructure::OpenBwTreeWithPLI;
+    } else if (structure == "OpenBw+OPLI") {
+      config.index_structure =
+          decltype(config)::IndexStructure::OpenBwTreeWithOPLI;
     } else {
       std::cout << "invalid structure name." << std::endl
                 << options.help() << std::endl;
       return EXIT_FAILURE;
     }
 
-    ConcurrentTable index(epoch_framework, config);
+    ConcurrentTable index(config);
     if (populated) {
       SPDLOG_INFO("IndexBench: index population starts.");
-      Population<decltype(index)>(index, epoch_framework);
+      Population<decltype(index)>(index);
       SPDLOG_INFO("IndexBench: population has finished.");
     }
 
-    auto res      = Benchmark<decltype(index)>(index, benchmark_type, structure,
-                                          epoch_framework, threads, proportion,
-                                          populated, measurement_duration);
+    auto res = Benchmark<decltype(index)>(
+        index, benchmark_type, structure, threads, proportion, populated,
+        measurement_duration, logic_time, limit);
     ops           = res.cps;
     insert_aborts = res.insert_aborts;
     scan_aborts   = res.scan_aborts;
@@ -262,7 +334,8 @@ int main(int argc, char** argv) {
     abort_rate    = (aps / (ops + aps) * 100);
   }
   SPDLOG_INFO("IndexBench: measurement has finisihed.");
-  SPDLOG_INFO("Structure;CommitPS;InsertAbortsPS;ScanAbortsPS;AbortRate");
+  SPDLOG_INFO(
+      "Structure;CommitPS;InsertAbortsPS;ScanAbortsPS;AbortPS;AbortRate");
   SPDLOG_INFO("{0};{1};{2};{3};{4};{5}", structure, ops, insert_aborts,
               scan_aborts, aps, abort_rate);
 
