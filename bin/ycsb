@@ -52,7 +52,7 @@ touch error.log
 
 # Variable Thread
 for workload in a b c e f wo; do
-    for contention in 0 1 3 5 99; do
+    for contention in 3 99; do
         for number_of_thread in 1 $(seq 2 2 $1); do
             for protocol in Silo SiloNWR; do
                 for index in OpenBwTree PLI; do

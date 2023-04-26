@@ -27,7 +27,7 @@ def style(i):
 # x-axis thread (1000ms)
 for workload in df.workloads.unique():
     for contention in df.contention.unique():
-        if contention not in [0.3, 0.9]:
+        if contention not in [0.3, 0.99]:
             continue
         plt.figure()
         ax = df.plot()
