@@ -64,7 +64,7 @@ void PopulateDatabase(LineairDB::Database& db, Workload& workload,
   std::vector<int> failed;
   std::vector<std::thread> workers;
 
-  worker_threads = std::min({workload.recordcount, worker_threads, 100lu});
+  worker_threads = std::min({workload.recordcount, worker_threads, 10lu});
   workers.reserve(worker_threads);
   for (size_t i = 0; i < worker_threads; ++i) {
     size_t from = workload.recordcount * i / worker_threads;
