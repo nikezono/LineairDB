@@ -70,7 +70,8 @@ void PopulateDatabase(LineairDB::Database& db, Workload& workload,
     size_t from = workload.recordcount * i / worker_threads;
     size_t to   = workload.recordcount * (i + 1) / worker_threads;
     failed.emplace_back(0);
-    workers.emplace_back([&, from, to]() {
+    workers.emplace_back([&, i, from, to]() {
+      SPDLOG_INFO("Thread {} populates the records with id {}-{}", i, from, to);
       db.ExecuteTransaction(
           [&, from, to](LineairDB::Transaction& tx) {
             std::byte ptr[workload.payload_size];
@@ -78,15 +79,16 @@ void PopulateDatabase(LineairDB::Database& db, Workload& workload,
               tx.Write(std::to_string(idx), ptr, workload.payload_size);
             }
           },
-          [](LineairDB::TxStatus status) {
+          [i, from, to](LineairDB::TxStatus status) {
             if (status != LineairDB::TxStatus::Committed) {
               SPDLOG_ERROR("YCSB: a database population query is aborted");
               exit(1);
             }
+	    SPDLOG_INFO("Thread {} has done the population job {}-{}", i, from, to);
           });
     });
   }
-  SPDLOG_INFO("YCSB: Database population queries are enqueued");
+  SPDLOG_INFO("YCSB: Database population queries are enqueued, Threads: {}", worker_threads);
   for (auto& w : workers) { w.join(); }
   db.Fence();
   SPDLOG_INFO("YCSB: Database population is completed");
