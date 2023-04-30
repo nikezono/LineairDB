@@ -120,7 +120,6 @@ void ExecuteWorkload(LineairDB::Database& db, Workload& workload,
     } else if (what_i_do < (proportion += workload.insert_proportion)) {
       operation = YCSB::Interface::Insert;
     } else if (what_i_do < (proportion += workload.scan_proportion)) {
-      operation = YCSB::Interface::Scan;
       is_scan   = true;
     } else if (what_i_do < (proportion += workload.rmw_proportion)) {
       operation = YCSB::Interface::ReadModifyWrite;
@@ -146,8 +145,9 @@ void ExecuteWorkload(LineairDB::Database& db, Workload& workload,
 
   if (use_handler) {
     auto& tx = db.BeginTransaction();
+    const bool need_phantomcheck = db.GetConfig().index_structure != LineairDB::Config::IndexStructure::HashTableWithPrecisionLockingIndex;
     if (is_scan) {
-      operation(tx, keys.front(), keys.back(), payload, workload.payload_size);
+      YCSB::Interface::Scan(tx, keys.front(), keys.back(), payload, workload.payload_size, need_phantomcheck);
     } else {
       for (auto& key : keys) {
         operation(tx, key, "", payload, workload.payload_size);
@@ -163,13 +163,12 @@ void ExecuteWorkload(LineairDB::Database& db, Workload& workload,
       }
     }
   } else {
+    const bool need_phantomcheck = db.GetConfig().index_structure != LineairDB::Config::IndexStructure::HashTableWithPrecisionLockingIndex;
     db.ExecuteTransaction(
         [is_scan, operation, keys, payload,
-         workload](LineairDB::Transaction& tx) {
+         workload, need_phantomcheck](LineairDB::Transaction& tx) {
           if (is_scan) {
-            operation(tx, keys.front(), keys.back(), payload,
-                      workload.payload_size);
-
+            YCSB::Interface::Scan(tx, keys.front(), keys.back(), payload, workload.payload_size, need_phantomcheck);
           } else {
             for (auto& key : keys) {
               operation(tx, key, "", payload, workload.payload_size);

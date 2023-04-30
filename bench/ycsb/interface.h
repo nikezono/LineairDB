@@ -18,6 +18,7 @@
 #define LINEAIRDB_YCSB_INTERFACE_H
 
 #include <lineairdb/transaction.h>
+#include "spdlog/spdlog.h"
 
 #include <string_view>
 
@@ -41,14 +42,40 @@ void Insert(LineairDB::Transaction& tx, std::string_view key, std::string_view,
 }
 
 void Scan(LineairDB::Transaction& tx, std::string_view begin,
-          std::string_view end, void*, size_t) {
+          std::string_view end, void*, size_t, bool phantom_check = true) {
   // from original: max scan length = 100
   size_t hit = 0;
-  tx.Scan(begin, end, [&](auto, auto) {
-    hit++;
-    if (10 <= hit) return true;
-    return false;
-  });
+  if (phantom_check) {
+    std::vector<std::string> keys{};
+    tx.Scan(begin, end, [&](auto key, auto) {
+      hit++;
+      keys.emplace_back(key);
+      if (100 <= hit) return true;
+      return false;
+    });
+
+    //SPDLOG_ERROR("rescan");
+
+    // retry
+    size_t i = 0;
+    tx.Scan(begin, end, [&](auto key, auto) {
+      if (100 <= hit) return true;
+      if (key == keys[i]) {
+	// SPDLOG_ERROR("key inconsistent {} {} {}", key, keys[i], i);
+        tx.Abort();
+        return true;
+      }
+      i++;
+      return false;
+    });
+
+  } else {
+   tx.Scan(begin, end, [&](auto key, auto) {
+      hit++;
+      if (100 <= hit) return true;
+      return false;
+    });
+  }
 }
 void ReadModifyWrite(LineairDB::Transaction& tx, std::string_view key,
                      std::string_view, void* payload, size_t size) {

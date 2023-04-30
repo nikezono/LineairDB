@@ -53,7 +53,7 @@ touch error.log
 # Variable Thread
 for workload in a b c e f wo; do
     for contention in 3 99; do
-        for number_of_thread in 1 $(seq 2 2 $1); do
+        for number_of_thread in 1 $(seq 8 8 $1); do
             for protocol in Silo SiloNWR; do
                 for index in OpenBwTree PLI; do
                     for times in 1 2 3; do
@@ -80,7 +80,7 @@ done
 
 # Variable Epoch
 for workload in a b e f; do
-    for contention in 3 5 99; do
+    for contention in 3  99; do
         for number_of_epoch in 1 $(seq 100 100 1000); do
             for protocol in Silo SiloNWR; do
                 for index in OpenBwTree PLI; do

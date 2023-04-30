@@ -32,12 +32,14 @@ option(BUILD_TESTS "Build testing executables" ON)
 option(BUILD_BENCHMARKS "Build benchmarking executables" ON)
 option(BUILD_SANITIZER "Build with clang's address sanitizer" ON)
 
+#set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -stdlib=libc++ -lc++abi")
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Compiler Options
 set(CMAKE_C_FLAGS "--std=c99")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -mcx16 -fPIC")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mcx16 -fPIC -Wno-missing-exception-spec -Wno-all")
 
 set(CMAKE_CXX_FLAGS_DEBUG
     "${CMAKE_CXX_FLAGS} -g -O0 --save-temps -fno-omit-frame-pointer")
@@ -82,6 +84,7 @@ else()
   if(APPLE) # Use libc++
     target_link_libraries(${PROJECT_NAME} c++ stdc++fs atomic pthread)
   else() # Use libstdc++
+    message("WWW: c++")
     target_link_libraries(${PROJECT_NAME} stdc++ stdc++fs atomic pthread numa)
   endif()
 endif()

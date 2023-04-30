@@ -105,6 +105,14 @@ int main(int argc, char** argv) {
 
   if (index == "OpenBwTree") {
     config.index_structure = decltype(config)::IndexStructure::OpenBwTree;
+  } else if (index == "OpenBwPLI") {
+    config.index_structure = decltype(config)::IndexStructure::OpenBwTreeWithPLI;
+  } else if (index == "PLI") {
+    config.index_structure = decltype(config)::IndexStructure::HashTableWithPrecisionLockingIndex;
+  } else {
+    std::cout << "There is no index named" << index << std::endl;
+    std::cout << options.help() << std::endl;
+    exit(0);
   }
 
   LineairDB::Database db(config);
