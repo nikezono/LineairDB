@@ -85,7 +85,7 @@ for workload in a b e f; do
             for protocol in Silo SiloNWR; do
                 for index in OpenBwTree PLI; do
                     for times in 1 2 3; do
-                        bench/ycsb -H true -e $number_of_epoch -w $workload -c $protocol -t 1 -q $1 -i $index -d 5000 -C 0.$contention -o tmp.json
+                        run_and_log bench/ycsb -H true -e $number_of_epoch -w $workload -c $protocol -t 1 -q $1 -i $index -d 5000 -C 0.$contention -o tmp.json
                     done
                 done
             done
