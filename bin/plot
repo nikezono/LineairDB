@@ -80,27 +80,28 @@ for workload in df.workloads.unique():
     plt.close('all')
 
 # x-axis epoch
-for contention in [0.3, 0.9]:
-    plt.figure()
-    ax = df.plot()
-    ax.cla()
-    cnt = 0
-    for index in df["index"].unique():
-        for protocol in df.protocol.unique():
-            if protocol == "Silo" and index == "PLI":
-                continue
-            table = df.query(
-                f'workloads=="a" and threads=={df.threads.max()}  and contention=={contention} and index=="{index}" and protocol=="{protocol}"')
-            line = table.groupby(
-                ["index", "protocol", "epoch"], as_index=False).mean()
-            line.plot(x='epoch', y='tps',
-                        xlim=[0, 1000],
-                        label=label_gen(protocol, index),
-                        ax=ax,
-                        style=style(cnt))
-            cnt = cnt + 1
+for workload in df.workloads.unique():
+    for contention in [0.3, 0.99]:
+        plt.figure()
+        ax = df.plot()
+        ax.cla()
+        cnt = 0
+        for index in df["index"].unique():
+            for protocol in df.protocol.unique():
+                if protocol == "Silo" and index == "PLI":
+                    continue
+                table = df.query(
+                    f'workloads=="{workload}" and threads=={df.threads.max()}  and contention=={contention} and index=="{index}" and protocol=="{protocol}"')
+                line = table.groupby(
+                    ["index", "protocol", "epoch"], as_index=False).mean()
+                line.plot(x='epoch', y='tps',
+                            xlim=[0, 1000],
+                            label=label_gen(protocol, index),
+                            ax=ax,
+                            style=style(cnt))
+                cnt = cnt + 1
 
-    plt.savefig(
-        f"{base_path}/workload{workload}_contention{contention}_epoch.pdf")
-    plt.clf()
-    plt.close('all')
+        plt.savefig(
+            f"{base_path}/workload{workload}_contention{contention}_epoch.pdf")
+        plt.clf()
+        plt.close('all')
