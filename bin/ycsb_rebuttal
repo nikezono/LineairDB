@@ -1,0 +1,108 @@
+#! /bin/bash
+set -x
+
+if [ "$#" -ne "1" ]; then
+    echo "ycsb wrapper requires one arguments: number of max threads."
+    exit 1
+fi
+cd $(dirname $0)
+cd ../build
+
+mkdir -p artifacts/ycsb/json
+mkdir -p artifacts/ycsb/figures
+
+ulimit -c unlimited
+
+ERRORLOG="error.log"
+run_and_log() {
+    cmd=$@
+    echo "Running command: $cmd"
+    $cmd 2>>result_for_rebuttal.csv
+
+    exit_status=$?
+
+    if [ $exit_status -ne 0 ]; then
+        timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+
+        echo "[$timestamp] Error occurred while executing: $cmd, code: $exit_status"
+        echo "[$timestamp] Error occurred while executing: $cmd, code: $exit_status" >> $ERRORLOG
+    fi
+    echo "END"
+}
+
+echo "workloads,epoch,threads,contention,index,protocol,tps,etime,commits,aborts" >result.csv
+rm error.log
+touch error.log
+
+# Variable RecordSize
+for workload in a; do
+    for size in 8 16 32 64 128 256 512 1024 2048; do
+        for protocol in Silo SiloNWR; do
+            for index in OpenBwTree PLI; do
+                for times in 1 2 3; do
+                    run_and_log bench/ycsb -H true -p $size -w $workload -c $protocol -q $1 -t 1 -i $index -d 5000 -e 1000 -C 0.99 -o tmp.json
+                done
+            done
+        done
+    done
+done
+
+# Variable Thread, YCSB-A, Fixed RecordSize 2048bytes (2048 * 100000, about 200MB consumes. more than the capacity of L3 Cache)
+for workload in d; do
+    for contention in 3 99; do
+        for number_of_thread in 1 $(seq 8 8 $1); do
+            for protocol in Silo SiloNWR; do
+                for index in OpenBwTree PLI; do
+                    for times in 1 2 3; do
+                        run_and_log bench/ycsb -H true -p 2048 -w $workload -c $protocol -q $number_of_thread -t 1 -i $index -d 5000 -e 1000 -C 0.$contention -o tmp.json
+                    done
+                done
+            done
+        done
+    done
+done
+
+# Variable Thread, YCSB-D
+for workload in d; do
+    for contention in 3 99; do
+        for number_of_thread in 1 $(seq 8 8 $1); do
+            for protocol in Silo SiloNWR; do
+                for index in OpenBwTree PLI; do
+                    for times in 1 2 3; do
+                        run_and_log bench/ycsb -H true -w $workload -c $protocol -q $number_of_thread -t 1 -i $index -d 5000 -e 1000 -C 0.$contention -o tmp.json
+                    done
+                done
+            done
+        done
+    done
+done
+
+# Variable Contention, YCSB-D
+for workload in d; do
+    for contention in 0 1 2 3 4 5 6 7 8 9 99; do
+        for protocol in Silo SiloNWR; do
+            for index in OpenBwTree PLI; do
+                for times in 1 2 3; do
+                    run_and_log bench/ycsb -H true -w $workload -c $protocol -q $1 -t 1 -i $index -d 5000 -e 1000 -C 0.$contention -o tmp.json
+                done
+            done
+        done
+    done
+done
+
+# Variable Epoch, YCSB-D
+for workload in d; do
+    for contention in 3 99; do
+        for number_of_epoch in 1 $(seq 100 100 1000); do
+            for protocol in Silo SiloNWR; do
+                for index in OpenBwTree PLI; do
+                    for times in 1 2 3; do
+                        run_and_log bench/ycsb -H true -e $number_of_epoch -w $workload -c $protocol -t 1 -q $1 -i $index -d 5000 -C 0.$contention -o tmp.json
+                    done
+                done
+            done
+        done
+    done
+done
+
+cat $ERRORLOG
