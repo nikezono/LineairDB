@@ -48,7 +48,7 @@ for workload in a; do
 done
 
 # Variable Thread, YCSB-A, Fixed RecordSize 2048bytes (2048 * 100000, about 200MB consumes. more than the capacity of L3 Cache)
-for workload in d; do
+for workload in a; do
     for contention in 3 99; do
         for number_of_thread in 1 $(seq 8 8 $1); do
             for protocol in Silo SiloNWR; do
@@ -62,8 +62,8 @@ for workload in d; do
     done
 done
 
-# Variable Thread, YCSB-D
-for workload in d; do
+# Variable Thread, YCSB-D, YCSB-E
+for workload in d e; do
     for contention in 3 99; do
         for number_of_thread in 1 $(seq 8 8 $1); do
             for protocol in Silo SiloNWR; do
@@ -77,8 +77,8 @@ for workload in d; do
     done
 done
 
-# Variable Contention, YCSB-D
-for workload in d; do
+# Variable Contention, YCSB-D, YCSB-E
+for workload in d e; do
     for contention in 0 1 2 3 4 5 6 7 8 9 99; do
         for protocol in Silo SiloNWR; do
             for index in OpenBwTree PLI; do
@@ -90,8 +90,8 @@ for workload in d; do
     done
 done
 
-# Variable Epoch, YCSB-D
-for workload in d; do
+# Variable Epoch, YCSB-D, YCSB-E
+for workload in d e; do
     for contention in 3 99; do
         for number_of_epoch in 1 $(seq 100 100 1000); do
             for protocol in Silo SiloNWR; do
