@@ -71,7 +71,6 @@ void PopulateDatabase(LineairDB::Database& db, Workload& workload,
     size_t to   = workload.recordcount * (i + 1) / worker_threads;
     failed.emplace_back(0);
     workers.emplace_back([&, i, from, to]() {
-      SPDLOG_INFO("Thread {} populates the records with id {}-{}", i, from, to);
       for (size_t idx = from; idx < to; idx++) {
         db.ExecuteTransaction(
           [&, idx](LineairDB::Transaction& tx) {
@@ -85,7 +84,6 @@ void PopulateDatabase(LineairDB::Database& db, Workload& workload,
             }
           });
       }
-      SPDLOG_INFO("Thread {} has done the population job {}-{}", i, from, to);
     });
   }
   SPDLOG_INFO("YCSB: Database population queries are enqueued, Threads: {}", worker_threads);
@@ -138,8 +136,7 @@ void ExecuteWorkload(LineairDB::Database& db, Workload& workload,
     } else if (workload.distribution == Distribution::Zipfian) {
       keys.emplace_back(std::to_string(rand->Next()));
     } else if (workload.distribution == Distribution::Latest) {
-      SPDLOG_ERROR("Distribution::Latest does not impl yet");
-      exit(1);
+      keys.emplace_back(std::to_string(RandomGenerator::LatestNext(rand)));
     }
   }
 
