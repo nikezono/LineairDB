@@ -181,7 +181,7 @@ int main(int argc, char** argv) {
   size_t threads =
       use_handler ? workload.client_thread_size : config.max_thread;
 
-  std::cerr << workload_type << "," << config.epoch_duration_ms << ","
+  std::cerr << workload_type << "," << workload.payload_size << "," << config.epoch_duration_ms << ","
             << threads << "," << workload.zipfian_theta << "," << index << ","
             << protocol << "," << throughput << "," << etime << "," << commits
             << "," << aborts << std::endl;

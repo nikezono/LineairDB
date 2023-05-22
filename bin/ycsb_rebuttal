@@ -30,20 +30,13 @@ run_and_log() {
     echo "END"
 }
 
-rebuild() {
-    echo "rebuild with BufferSize=$1"
-    cmake .. -G Ninja -DLINEAIRDB_DATA_BUFFER_SIZE=$1 -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++
-    ninja ycsb
-}
-
-echo "workloads,epoch,threads,contention,index,protocol,tps,etime,commits,aborts" >result.csv
+echo "workloads,recordsize,epoch,threads,contention,index,protocol,tps,etime,commits,aborts" >result_for_rebuttal.csv
 rm error.log
 touch error.log
 
 # Variable RecordSize
 for workload in a; do
     for size in 8 16 32 64 128 256 512 1024 2048; do
-        rebuild $size
         for protocol in Silo SiloNWR; do
             for index in OpenBwTree PLI; do
                 for times in 1 2 3; do
@@ -55,7 +48,6 @@ for workload in a; do
 done
 
 # Variable Thread, YCSB-A, Fixed RecordSize 2048bytes (2048 * 100000, about 200MB consumes. more than the capacity of L3 Cache)
-rebuild 2048
 for workload in a; do
     for contention in 3 99; do
         for number_of_thread in 1 $(seq 8 8 $1); do
@@ -69,8 +61,6 @@ for workload in a; do
         done
     done
 done
-rebuild 512 # reset to default
-
 
 # Variable Thread, YCSB-D, YCSB-E
 for workload in d e; do
