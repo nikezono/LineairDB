@@ -23,16 +23,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
-<<<<<<< HEAD
 #include <new>
-=======
->>>>>>> 74c5570... Configurable buffer size (#397)
 
 #include "util/logger.hpp"
-
-#ifndef LINEAIRDB_DATA_BUFFER_SIZE
-#define LINEAIRDB_DATA_BUFFER_SIZE 512
-#endif
 
 namespace LineairDB {
 
@@ -43,6 +36,8 @@ struct DataBuffer {
   DataBuffer() : size(0) { value = nullptr; }
   ~DataBuffer() {
     if (value != nullptr) delete[] value;
+    value = nullptr;
+    size = 0;
   }
 
   void Reset(const std::byte* v, const size_t s) {

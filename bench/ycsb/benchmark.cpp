@@ -129,10 +129,11 @@ void ExecuteWorkload(LineairDB::Database& db, Workload& workload,
     }
   }
 
-  std::vector<std::string> keys(workload.reps_per_txn);
+  std::vector<std::string> keys;
 
   // choose target key
   for (size_t i = 0; i < workload.reps_per_txn; i++) {
+
     if (is_insert) {
       keys.emplace_back(std::to_string(RandomGenerator::XAdd()));
     } else {
@@ -142,6 +143,9 @@ void ExecuteWorkload(LineairDB::Database& db, Workload& workload,
         keys.emplace_back(std::to_string(rand->Next(workload.has_insert)));
       } else if (workload.distribution == Distribution::Latest) {
         keys.emplace_back(std::to_string(RandomGenerator::LatestNext(rand)));
+      } else {
+        SPDLOG_ERROR("not found");
+        exit(1);
       }
     }
   }
@@ -196,7 +200,10 @@ void ExecuteWorkload(LineairDB::Database& db, Workload& workload,
 rapidjson::Document RunBenchmark(LineairDB::Database& db, Workload& workload,
                                  bool use_handler = true) {
   std::vector<std::thread> clients;
-  std::vector<std::array<std::byte, 512>> buffers(workload.client_thread_size);
+  std::vector<std::byte*> buffers;
+  for(size_t i = 0; i <= workload.client_thread_size; i++){
+    buffers.push_back(new std::byte[workload.payload_size]);
+  }
   ThreadKeyStorage<RandomGenerator> thread_local_random;
 
   std::atomic<bool> start_flag(false);
@@ -207,9 +214,8 @@ rapidjson::Document RunBenchmark(LineairDB::Database& db, Workload& workload,
       rand->Init(workload.recordcount, workload.zipfian_theta);
 
       waits_count.fetch_add(1);
-
       while (finish_flag.load() == false) {
-        ExecuteWorkload(db, workload, rand, &buffers[i][0], use_handler);
+        ExecuteWorkload(db, workload, rand, buffers[i], use_handler);
       }
     }));
   }
@@ -228,6 +234,10 @@ rapidjson::Document RunBenchmark(LineairDB::Database& db, Workload& workload,
   SPDLOG_INFO("YCSB: Benchmark end.");
   db.Fence();
   SPDLOG_INFO("YCSB: DB Fenced.");
+
+  for(size_t i = 0; i <= workload.client_thread_size; i++){
+    delete[] buffers[i];
+  }
 
   uint64_t total_commits = 0;
   uint64_t total_aborts  = 0;

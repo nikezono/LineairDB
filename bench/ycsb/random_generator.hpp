@@ -84,13 +84,12 @@ class RandomGenerator {
   // https://github.com/brianfrankcooper/YCSB/blob/master/core/src/main/java/site/ycsb/generator/SkewedLatestGenerator.java
   static std::atomic<uint64_t> latest;
   static uint64_t XAdd() {
-    //SPDLOG_ERROR("insert {}", latest.load());
-    return latest.fetch_add(1);
+    const auto id =  latest.fetch_add(1);
+    return id;
   }
   static uint64_t LatestNext(RandomGenerator* rand) {
     const auto lt = latest.load();
-    const auto next = lt - rand->Next(lt);
-    //SPDLOG_ERROR("max: {}, next: {}", lt, next);
+    const auto next = lt - rand->Next(lt); // "lt" is not inserted
     return next;
   }
 

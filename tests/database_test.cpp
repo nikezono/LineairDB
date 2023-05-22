@@ -51,40 +51,6 @@ TEST_F(DatabaseTest, InstantiateWithConfig) {
   ASSERT_NO_THROW(db_ = std::make_unique<LineairDB::Database>(conf));
 }
 
-TEST_F(DatabaseTest, DeathTest_IsbufferSizeConfigurable) {
-  db_.reset(nullptr);
-
-  LineairDB::Config conf;
-  conf.checkpoint_period    = 1;
-  conf.max_thread           = 1;
-  conf.enable_checkpointing = false;
-
-  std::array<std::byte, 1024> alice;
-
-  ::testing::FLAGS_gtest_death_test_style = "threadsafe";
-
-  {                                 // expect to fail
-    conf.internal_buffer_size = 1;  // byte
-    EXPECT_DEATH(
-        {
-          LineairDB::Database db(conf);
-          TestHelper::writeBufferAsAlice<decltype(alice)>(&db, alice);
-        },
-        ".*ERROR in DataBuffer.*");
-  }
-
-  {                                    // expect to succeess
-    conf.internal_buffer_size = 1024;  // byte
-    EXPECT_EXIT(
-        {
-          LineairDB::Database db(conf);
-          TestHelper::writeBufferAsAlice<decltype(alice)>(&db, alice);
-          exit(EXIT_SUCCESS);
-        },
-        ::testing::ExitedWithCode(EXIT_SUCCESS), ".*");
-  }
-}
-
 TEST_F(DatabaseTest, ExecuteTransaction) {
   int value_of_alice = 1;
   TestHelper::DoTransactions(

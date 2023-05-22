@@ -14,6 +14,7 @@ mkdir -p artifacts/ycsb/figures
 ulimit -c unlimited
 
 ERRORLOG="error.log"
+
 run_and_log() {
     cmd=$@
     echo "Running command: $cmd"
@@ -26,6 +27,15 @@ run_and_log() {
 
         echo "[$timestamp] Error occurred while executing: $cmd, code: $exit_status"
         echo "[$timestamp] Error occurred while executing: $cmd, code: $exit_status" >> $ERRORLOG
+
+        while true; do
+          echo "Replaying the failure commands $cmd"
+          $cmd 2>>result_for_rebuttal.csv
+          exit_status=$?
+          if [ $exit_status -eq 0 ]; then
+            break
+          fi
+        done
     fi
     echo "END"
 }
