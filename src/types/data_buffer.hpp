@@ -25,19 +25,21 @@
 
 #include "util/logger.hpp"
 
+#ifndef LINEAIRDB_DATA_BUFFER_SIZE
+#define LINEAIRDB_DATA_BUFFER_SIZE 512
+#endif
+
 namespace LineairDB {
 
 struct DataBuffer {
-  // TODO enable to change this parameter at the compile time
-  constexpr static size_t ValueBufferSize = 512;
 
-  std::byte value[ValueBufferSize];
+  std::byte value[LINEAIRDB_DATA_BUFFER_SIZE];
   size_t size = 0;
 
   void Reset(const std::byte* v, const size_t s) {
-    if (ValueBufferSize < s) {
+    if (LINEAIRDB_DATA_BUFFER_SIZE < s) {
       SPDLOG_ERROR("write buffer overflow. expected: {0}, capacity: {1}", s,
-                   ValueBufferSize);
+                   LINEAIRDB_DATA_BUFFER_SIZE);
       exit(EXIT_FAILURE);
     }
     size = s;
@@ -46,5 +48,7 @@ struct DataBuffer {
   void Reset(const DataBuffer& rhs) { Reset(rhs.value, rhs.size); }
   bool IsEmpty() const { return size == 0; }
 };
+
+
 }  // namespace LineairDB
 #endif /* LINEAIRDB_DATA_BUFFER_HPP */

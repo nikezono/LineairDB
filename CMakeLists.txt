@@ -34,10 +34,13 @@ option(BUILD_SANITIZER "Build with clang's address sanitizer" ON)
 
 #set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -stdlib=libc++ -lc++abi")
 
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# Preprocessor Definitions
+set(LINEAIRDB_DATA_BUFFER_SIZE 512 CACHE STRING "Value buffer size")
+add_compile_definitions(LINEAIRDB_DATA_BUFFER_SIZE=${LINEAIRDB_DATA_BUFFER_SIZE})
 
 # Compiler Options
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_FLAGS "--std=c99")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mcx16 -fPIC -Wno-missing-exception-spec -Wno-all")
 
