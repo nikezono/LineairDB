@@ -88,7 +88,10 @@ const std::pair<const std::byte* const, const size_t> Transaction::Impl::Read(
                             snapshot.data_item_copy.size());
     }
   }
-  auto* index_leaf  = db_pimpl_->GetIndex().GetOrInsert(key);
+  auto* index_leaf  = db_pimpl_->GetIndex().Get(key);
+  if (index_leaf == nullptr){
+    return {nullptr, 0};
+  }
   Snapshot snapshot = {key, nullptr, 0, index_leaf};
 
   snapshot.data_item_copy = concurrency_control_->Read(key, index_leaf);

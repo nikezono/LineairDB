@@ -41,26 +41,21 @@ class OpenBwTreeIndex final : public IndexBase<T> {
     PreHook();
   }
 
-  // ~OpenBwTreeIndex() {
-  //   SPDLOG_ERROR("destructor called");
-  //   ForEach([&](const auto key, const T&) {
-  //     auto value_set = bwtree_.GetValue(k);
-  //     for (auto)
-  //     delete item;
-  //     return false;
-  //   });
-  // }
+  ~OpenBwTreeIndex() {
+    ForEach([&](const auto key, const T& item) {
+      auto* v = &item;
+      if (v != nullptr) delete v;
+      return false;
+    });
+  }
 
   T* Get(const std::string_view key) override final {
     PreHook();
     const auto k   = std::string(key);
     auto value_set = bwtree_.GetValue(k);
     if (value_set.empty()) return nullptr;
-    // if (1 < value_set.size()){
-    //   SPDLOG_ERROR("valueset size {}, key {}", value_set.size(), key);
-    // }
-    // assert(value_set.size() == 1);
-    return value_set.begin()->get();
+    assert(value_set.size() == 1);
+    return *value_set.begin();
   }
 
   /**
@@ -69,10 +64,12 @@ class OpenBwTreeIndex final : public IndexBase<T> {
   bool Put(const std::string_view key, const T& rhs) override final {
     PreHook();
     const auto k      = std::string(key);
-    auto new_item     = std::shared_ptr<DataItem>(new DataItem(rhs));
+    auto new_item     = new DataItem(rhs);
     const auto result = bwtree_.Insert(k, new_item);
-    //if (!result) { delete new_item; }
-    // if (result) {SPDLOG_ERROR("inserted {}", key);}
+    if (!result) {
+      SPDLOG_ERROR("already inserted {}", key);
+      delete new_item;
+    }
     return result;
   }
 
@@ -124,23 +121,23 @@ class OpenBwTreeIndex final : public IndexBase<T> {
     auto it = bwtree_.Begin();
     while (!it.IsEnd()) {
       const auto key = it->first;
-      auto value     = Get(key);
-      f(key, *value);
+      bool stop = f(it->first, *it->second);
+      if (stop) break;
+      it++;
     }
   }
 
   void PreHook() {
     auto thread_id = wangziqi2013::bwtree::BwTreeBase::gc_id;
     if (thread_id == -1) {
-      [[maybe_unused]] auto now = NumThreads.fetch_add(1);
+      auto now = NumThreads.fetch_add(1);
       assert(now < maximum);
       bwtree_.RegisterThread();
     }
   }
 
  private:
-
-  wangziqi2013::bwtree::BwTree<std::string, std::shared_ptr<DataItem>> bwtree_;
+  wangziqi2013::bwtree::BwTree<std::string, DataItem*> bwtree_;
   size_t maximum;
   static std::atomic<size_t> NumThreads;
 };

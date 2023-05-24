@@ -1,5 +1,6 @@
 #! /bin/bash
 set -x
+set -e
 
 if [ "$#" -ne "1" ]; then
     echo "ycsb wrapper requires one arguments: number of max threads."
