@@ -134,7 +134,13 @@ void ExecuteWorkload(LineairDB::Database& db, Workload& workload,
   // choose target key
   for (size_t i = 0; i < workload.reps_per_txn; i++) {
 
-    if (is_insert) {
+    if (is_scan){
+      const uint64_t begin = rand->Next(workload.has_insert); // Zipfian
+      const uint64_t end = begin + rand->UniformRandom(100); // YCSB's scan operation range is limited up to 100
+      keys.emplace_back(std::to_string(begin));
+      keys.emplace_back(std::to_string(end));
+      break;
+    } else if (is_insert) {
       keys.emplace_back(std::to_string(RandomGenerator::XAdd()));
     } else {
       if (workload.distribution == Distribution::Uniform) {
@@ -175,7 +181,7 @@ void ExecuteWorkload(LineairDB::Database& db, Workload& workload,
         [is_scan, operation, keys, payload,
          workload, need_phantomcheck](LineairDB::Transaction& tx) {
           if (is_scan) {
-            YCSB::Interface::Scan(tx, keys.front(), keys.back(), payload, workload.payload_size, need_phantomcheck);
+             YCSB::Interface::Scan(tx, keys.front(), keys.back(), payload, workload.payload_size, need_phantomcheck);
           } else {
             for (auto& key : keys) {
               operation(tx, key, "", payload, workload.payload_size);
