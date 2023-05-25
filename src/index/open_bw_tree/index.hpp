@@ -54,6 +54,9 @@ class OpenBwTreeIndex final : public IndexBase<T> {
     const auto k   = std::string(key);
     auto value_set = bwtree_.GetValue(k);
     if (value_set.empty()) return nullptr;
+    if (1 < value_set.size()){
+      SPDLOG_ERROR("valueset size {}, key {}", value_set.size(), key);
+    }
     assert(value_set.size() == 1);
     return *value_set.begin();
   }
