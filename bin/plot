@@ -10,6 +10,12 @@ from IPython import embed
 df = pd.read_csv(sys.argv[1])
 base_path = os.path.dirname(__file__) + "/../build/artifacts/ycsb/figures"
 
+df["abortrate"] = 100 * (df["aborts"] / (df["aborts"] + df["commits"]))
+plt.rcParams["font.size"] = 18
+plt.rcParams["figure.dpi"] = 150
+plt.rcParams["figure.figsize"] = [6, 7]
+plt.tight_layout()
+
 
 def label_gen(p, i):
     if p == "Silo" and i == "OpenBwTree":
@@ -46,9 +52,11 @@ for workload in df.workloads.unique():
                           xlim=[0, df.threads.max()],
                           label=label_gen(protocol, index),
                           ax=ax,
-                          style=style(cnt))
+                          style=style(cnt),
+                          ylabel="Thoughput (req/sec)",
+                          xlabel="Number of Threads")
                 cnt = cnt + 1
-
+        plt.tight_layout()
         plt.savefig(
             f"{base_path}/workload{workload}_contention{contention}_tps.pdf")
         plt.clf()
@@ -72,8 +80,11 @@ for workload in df.workloads.unique():
                       xlim=[0.0, 1.0],
                       label=label_gen(protocol, index),
                       ax=ax,
-                      style=style(cnt))
+                      style=style(cnt),
+                      ylabel="Thoughput (req/sec)",
+                      xlabel="Contention Rate (theta)")
             cnt = cnt + 1
+    plt.tight_layout()
     plt.savefig(
         f"{base_path}/workload{workload}_contention.pdf")
     plt.clf()
@@ -98,10 +109,41 @@ for workload in df.workloads.unique():
                             xlim=[0, 1000],
                             label=label_gen(protocol, index),
                             ax=ax,
-                            style=style(cnt))
+                            style=style(cnt),
+                            ylabel="Thoughput (req/sec)",
+                            xlabel="Epoch duration (ms)")
                 cnt = cnt + 1
-
+        plt.tight_layout()
         plt.savefig(
             f"{base_path}/workload{workload}_contention{contention}_epoch.pdf")
+        plt.clf()
+        plt.close('all')
+
+# x-axis epoch y-axis abort
+for workload in df.workloads.unique():
+    for contention in [0.3, 0.99]:
+        plt.figure()
+        ax = df.plot()
+        ax.cla()
+        cnt = 0
+        for index in df["index"].unique():
+            for protocol in df.protocol.unique():
+                if protocol == "Silo" and index == "PLI":
+                    continue
+                table = df.query(
+                    f'workloads=="{workload}" and threads=={df.threads.max()}  and contention=={contention} and index=="{index}" and protocol=="{protocol}"')
+                line = table.groupby(
+                    ["index", "protocol", "epoch"], as_index=False).mean()
+                line.plot(x='epoch', y='abortrate',
+                            xlim=[0, 1000],
+                            label=label_gen(protocol, index),
+                            ax=ax,
+                            style=style(cnt),
+                            ylabel="Abort rate (%)",
+                            xlabel="Epoch duration (ms)")
+                cnt = cnt + 1
+        plt.tight_layout()
+        plt.savefig(
+            f"{base_path}/workload{workload}_contention{contention}_epoch_abort.pdf")
         plt.clf()
         plt.close('all')
