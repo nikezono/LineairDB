@@ -4,6 +4,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import sys
 import os
+from matplotlib.ticker import ScalarFormatter
+
 
 from IPython import embed
 
@@ -12,9 +14,10 @@ base_path = os.path.dirname(__file__) + "/../build/artifacts/ycsb/figures"
 
 df["abortrate"] = 100 * (df["aborts"] / (df["aborts"] + df["commits"]))
 
-plt.rcParams["font.size"] = 18
+plt.rcParams["font.size"] = 16
 plt.rcParams["figure.dpi"] = 150
 plt.rcParams["figure.figsize"] = [6, 7]
+
 plt.tight_layout()
 
 
@@ -63,8 +66,12 @@ for workload in ["f"]:
                         xlabel="Number of Threads")
                         
             cnt = cnt + 1
+        ax.yaxis.set_major_formatter(ScalarFormatter(useMathText=True))
+        ax.ticklabel_format(style="sci",  axis="y",scilimits=(0,0))
         plt.tight_layout()
         plt.savefig(
-            f"{base_path}/workload{workload}_contention{contention}_tps_with_pli.pdf")
+            f"{base_path}/workload{workload}_contention{contention}_tps_with_pli.pdf",
+                        bbox_inches='tight', pad_inches=0.1)
+
         plt.clf()
         plt.close('all')
