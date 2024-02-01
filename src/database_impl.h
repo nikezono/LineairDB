@@ -46,7 +46,7 @@ class Database::Impl {
         logger_(c),
         callback_manager_(c),
         epoch_framework_(c.epoch_duration_ms, EventsOnEpochIsUpdated()),
-        index_(epoch_framework_, c),
+        index_(c),
         checkpoint_manager_(c, index_, epoch_framework_) {
     if (Database::Impl::CurrentDBInstance == nullptr) {
       Database::Impl::CurrentDBInstance = this;

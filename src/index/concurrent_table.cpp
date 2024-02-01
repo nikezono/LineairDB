@@ -29,15 +29,6 @@ namespace LineairDB {
 namespace Index {
 
 ConcurrentTable::ConcurrentTable(Config config, WriteSetType recovery_set) {
-  index_ = std::make_unique<HashTableWithPrecisionLockingIndex<DataItem>>();
-  if (recovery_set.empty()) return;
-  for (auto& entry : recovery_set) {
-    index_->Put(entry.key, *entry.index_cache);
-  }
-}
-
-ConcurrentTable::ConcurrentTable(EpochFramework& epoch, Config config,
-                                 WriteSetType recovery_set) {
   switch (config.index_structure) {
     case Config::IndexStructure::HashTableWithPrecisionLockingIndex:
       index_ = std::make_unique<
@@ -51,14 +42,12 @@ ConcurrentTable::ConcurrentTable(EpochFramework& epoch, Config config,
       index_ = std::make_unique<OpenBwTreeIndex<DataItem>>();
       break;
     case Config::IndexStructure::OpenBwTreeWithPLI:
-      index_ = std::make_unique<
-          OpenBwTreeWithPrecisionLockingIndex<DataItem, BwOption::Pessimistic>>(
-          epoch);
+      index_ = std::make_unique<OpenBwTreeWithPrecisionLockingIndex<
+          DataItem, BwOption::Pessimistic>>();
       break;
     case Config::IndexStructure::OpenBwTreeWithOPLI:
-      index_ = std::make_unique<
-          OpenBwTreeWithPrecisionLockingIndex<DataItem, BwOption::Optimistic>>(
-          epoch);
+      index_ = std::make_unique<OpenBwTreeWithPrecisionLockingIndex<
+          DataItem, BwOption::Optimistic>>();
       break;
     default:
       index_ = std::make_unique<OpenBwTreeIndex<DataItem>>();

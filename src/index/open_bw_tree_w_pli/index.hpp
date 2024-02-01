@@ -37,26 +37,17 @@ enum class BwOption { Optimistic, Pessimistic };
 
 template <typename T, BwOption OPT = BwOption::Optimistic>
 class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
-  enum Status { Committed, Aborted, Running };
-
   struct Predicate {
-    EpochNumber epoch;
     std::string begin;
     std::string end;
-    Status status;
-
-    Predicate(EpochNumber ep, std::string_view b, std::string_view e)
-        : epoch(ep), begin(b), end(e), status(Running) {}
+    Predicate(std::string_view b, std::string_view e) : begin(b), end(e) {}
   };
 
   struct InsertOrDeleteEvent {
-    EpochNumber epoch;
     std::string key;
     bool is_delete_event;
-    Status status;
-
-    InsertOrDeleteEvent(EpochNumber ep, std::string_view k, bool i)
-        : epoch(ep), key(k), is_delete_event(i), status(Running) {}
+    InsertOrDeleteEvent(std::string_view k, bool i)
+        : key(k), is_delete_event(i) {}
   };
 
   struct IndexItem {
@@ -68,7 +59,6 @@ class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
   using ROWEXRangeIndexContainer = std::map<std::string, IndexItem>;
 
  private:
-  LineairDB::EpochFramework& epoch_manager_;
   std::atomic<bool> manager_stop_flag_;
   std::thread manager_;
 
@@ -80,34 +70,30 @@ class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
   MPMCConcurrentSetImpl<T> point_index_;
 
  public:
-  OpenBwTreeWithPrecisionLockingIndex(EpochFramework& e)
-      : epoch_manager_(e), manager_stop_flag_(false), manager_([&]() {
+  OpenBwTreeWithPrecisionLockingIndex()
+      : manager_stop_flag_(false), manager_([&]() {
+          char* e = std::getenv("EPOCH");
+          std::string ep(e);
+          size_t epoch = std::stoi(ep);
+          SPDLOG_INFO("EPOCH {}", epoch);
           while (manager_stop_flag_.load() != true) {
-            epoch_manager_.Sync();
-            const auto current_epoch = epoch_manager_.GetGlobalEpoch();
+            std::this_thread::sleep_for(std::chrono::milliseconds(epoch));
 
             // Clear predicate list
             if constexpr (OPT == BwOption::Pessimistic) {
-              // TODO: predicate_list_ のなかで， epoch+1 < current_epoch
-              // なものをdeleteしていく
-
-              // predicate_list_.Delete([](const auto& predicate) {
-              // predicate.epoch + 1 < current_epoch; });
+              predicate_list_.Clear();
             }
             // Before deleting, we update the index container to apply
             // insertions and deletions.
             {
               insert_or_delete_key_set_.Every([&](const auto& event) {
-                // TODO:  epoch+1 < current_epoch なものをdelete, applyしていく
-
-                if (event.epoch + 1 < current_epoch) {
-                  bw_tree_.Put(event.key, {});
-                }
-                // insert_or_delete_key_set_.Delete(event);
+                bw_tree_.Put(event.key, {});
                 return true;
               });
             }
 
+            // Clear insert_or_delete_keys
+            insert_or_delete_key_set_.Clear();
           }
         }) {}
 
@@ -125,9 +111,8 @@ class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
    */
   bool Put(const std::string_view key, const T& rhs) override final {
     {
-      const auto epoch = epoch_manager_.GetGlobalEpoch();
       if (IsInPredicateSet(key)) { return false; }
-      insert_or_delete_key_set_.Add({epoch, key, false});
+      insert_or_delete_key_set_.Add({key, false});
       if (IsInPredicateSet(key)) { return false; }
     }
     auto* value    = new T(rhs);
@@ -144,9 +129,7 @@ class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
     auto* new_entry = new T();
     if (!point_index_.Put(key, new_entry))
       delete new_entry;  // already inserted
-    const auto epoch = epoch_manager_.GetGlobalEpoch();
-
-    insert_or_delete_key_set_.Add({epoch, key, false});
+    insert_or_delete_key_set_.Add({key, false});
   }
 
   /**
@@ -184,12 +167,10 @@ class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
     const auto end   = std::string(e);
     if (end < begin) return std::nullopt;
 
-    const auto epoch = epoch_manager_.GetGlobalEpoch();
-
     {
       if (IsOverlapWithInsertOrDelete(b, e)) { return std::nullopt; }
       if constexpr (OPT == BwOption::Pessimistic) {
-        predicate_list_.Add({epoch, b, e});
+        predicate_list_.Add({b, e});
         if (IsOverlapWithInsertOrDelete(b, e)) { return std::nullopt; }
       }
     }
@@ -203,10 +184,7 @@ class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
   bool IsInPredicateSet(const std::string_view key) {
     if constexpr (OPT == BwOption::Optimistic) return false;
 
-    const auto epoch = epoch_manager_.GetGlobalEpoch();
-
     return !predicate_list_.Every([&](const auto& predicate) {
-      if (predicate.epoch + 1 < epoch) return true;  // it's obsolete. okay.
       return (key < predicate.begin || predicate.end < key);
     });
   }

@@ -34,9 +34,7 @@ namespace Index {
 
 class ConcurrentTable {
  public:
-  ConcurrentTable(Config config = Config(),
-                  WriteSetType recovery_set = WriteSetType());
-  ConcurrentTable(EpochFramework& e, Config config = Config(),
+  ConcurrentTable(Config config             = Config(),
                   WriteSetType recovery_set = WriteSetType());
 
   DataItem* Get(const std::string_view key);
