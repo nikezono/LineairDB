@@ -13,11 +13,11 @@ namespace Util {
 
 template <typename T>
 class LockfreeList {
+ public:
   struct Node;
   using Functor     = std::function<bool(const T&)>;
   using NodeFunctor = std::function<bool(Node*)>;
 
- private:
   std::atomic<Node*> head_;
   std::vector<Node*> garbages_;
 
@@ -43,7 +43,7 @@ class LockfreeList {
     garbages_.emplace_back(pre);
   }
 
-  void Add(const T& desired) {
+  void* Add(const T& desired) {
     auto* n = new Node(desired, nullptr);
 
     while (true) {
@@ -52,6 +52,7 @@ class LockfreeList {
 
       if (head_.compare_exchange_weak(h, n)) break;
     }
+    return n;
   }
 
   bool AddIfHeadSatisfies(const T& desired, Functor f) {
@@ -157,6 +158,7 @@ class LockfreeList {
     }
   }
 
+ public:
   struct Node {
     T value;
     std::atomic<Node*> next;

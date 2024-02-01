@@ -23,6 +23,7 @@
 #include <optional>
 #include <shared_mutex>
 #include <string_view>
+#include <vector>
 
 #include "index/index_base.hpp"
 #include "index/open_bw_tree/index.hpp"
@@ -35,28 +36,30 @@ namespace Index {
 
 enum class BwOption { Optimistic, Pessimistic };
 
-template <typename T, BwOption OPT = BwOption::Optimistic>
-class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
+enum Status { Running, Committed, Aborted };
+
   struct Predicate {
+    Status status;
     std::string begin;
     std::string end;
-    Predicate(std::string_view b, std::string_view e) : begin(b), end(e) {}
+    Predicate(std::string_view b, std::string_view e)
+        : status(Running), begin(b), end(e) {}
   };
 
   struct InsertOrDeleteEvent {
+    Status status;
     std::string key;
     bool is_delete_event;
     InsertOrDeleteEvent(std::string_view k, bool i)
-        : key(k), is_delete_event(i) {}
+        : status(Running), key(k), is_delete_event(i) {}
   };
 
-  struct IndexItem {
-    bool is_deleted;
-  };
+template <typename T, BwOption OPT = BwOption::Optimistic>
+class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
+ public:
 
   using PredicateList            = Util::LockfreeList<Predicate>;
-  using InsertOrDeleteKeySet     = Util::LockfreeList<InsertOrDeleteEvent>;
-  using ROWEXRangeIndexContainer = std::map<std::string, IndexItem>;
+  using InsertOrDeleteKeySet = Util::LockfreeList<InsertOrDeleteEvent>;
 
  private:
   std::atomic<bool> manager_stop_flag_;
@@ -64,7 +67,8 @@ class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
 
   PredicateList predicate_list_;
   InsertOrDeleteKeySet insert_or_delete_key_set_;
-  ROWEXRangeIndexContainer container_;
+  std::vector<void*> p_garbage_;
+  std::vector<void*> u_garbage_;
 
   OpenBwTreeIndex<T> bw_tree_;
   MPMCConcurrentSetImpl<T> point_index_;
@@ -72,28 +76,77 @@ class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
  public:
   OpenBwTreeWithPrecisionLockingIndex()
       : manager_stop_flag_(false), manager_([&]() {
-          char* e = std::getenv("EPOCH");
-          std::string ep(e);
-          size_t epoch = std::stoi(ep);
-          SPDLOG_INFO("EPOCH {}", epoch);
           while (manager_stop_flag_.load() != true) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(epoch));
+            std::this_thread::yield();
 
-            // Clear predicate list
+            // remove committed or aborted predicates
             if constexpr (OPT == BwOption::Pessimistic) {
-              predicate_list_.Clear();
-            }
-            // Before deleting, we update the index container to apply
-            // insertions and deletions.
-            {
-              insert_or_delete_key_set_.Every([&](const auto& event) {
-                bw_tree_.Put(event.key, {});
-                return true;
-              });
+              auto* node = predicate_list_.head_.load();
+              auto* prev = node;
+              auto* deletable_prev = node;
+
+              // Look for a node with "Status is not Running" for all subsequent
+              // nodes.
+              while (node != nullptr) {
+                if (node->value.status == Running) {
+                  deletable_prev = prev;
+                }
+                prev = node;
+                node = node->next.load();
+              }
+              if (prev != deletable_prev) {
+                auto* deletable_head = deletable_prev->next.load();
+                if (predicate_list_.head_.load() == deletable_head) {
+                  predicate_list_.head_.compare_exchange_strong(deletable_head,
+                                                                nullptr);
+                }
+                deletable_prev->next.store(nullptr);  // removed
+                // SPDLOG_ERROR("p_garbage {} to {}",
+                // deletable_head->value.begin,
+                //              deletable_head->value.end);
+                p_garbage_.emplace_back(deletable_prev);  // TODO delete nodes
+              }
             }
 
-            // Clear insert_or_delete_keys
-            insert_or_delete_key_set_.Clear();
+            // remove committed or aborted insertions and deletions, and apply
+            {
+              auto* node = insert_or_delete_key_set_.head_.load();
+              auto* prev = node;
+              auto* deletable_prev = node;
+
+              // Look for a node with "Status is not Running" for all subsequent
+              // nodes.
+              while (node != nullptr) {
+                if (node->value.status == Running) {
+                  deletable_prev = prev;
+                }
+                prev = node;
+                node = node->next.load();
+              }
+
+              if (prev != deletable_prev) {
+                // apply insertion and deletions for all committed events
+                for (auto* n = deletable_prev; n != nullptr;
+                     n = n->next.load()) {
+                  if (n->value.status == Committed) {
+                    // SPDLOG_ERROR("u_garbage {} {}", n->value.key,
+                    //             n->value.is_delete_event);
+                    if (n->value.is_delete_event) {
+                      T* data = point_index_.Get(n->value.key);
+                      *data = T();  // initialize;
+                    } else {
+                      point_index_.Put(n->value.key, {});
+                    }
+                  }
+                }
+                if (insert_or_delete_key_set_.head_.load() == deletable_prev) {
+                  insert_or_delete_key_set_.head_.compare_exchange_strong(
+                      deletable_prev, nullptr);
+                }
+                deletable_prev->next.store(nullptr);      // removed
+                u_garbage_.emplace_back(deletable_prev);  // TODO delete nodes
+              }
+            }
           }
         }) {}
 
@@ -109,27 +162,33 @@ class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
   /**
    * @note return false if a phantom anomaly has detected.
    */
-  bool Put(const std::string_view key, const T& rhs) override final {
+  bool Put(const std::string_view key, const T& rhs,
+           PredicateSetType* predicate_set) override final {
     {
-      if (IsInPredicateSet(key)) { return false; }
-      insert_or_delete_key_set_.Add({key, false});
-      if (IsInPredicateSet(key)) { return false; }
+      if (IsInPredicateSet(key)) {
+        return false;
+      }
+      auto* n = insert_or_delete_key_set_.Add({key, false});
+      if (predicate_set) predicate_set->push_back(n);
+      if (IsInPredicateSet(key)) {
+        return false;
+      }
     }
-    auto* value    = new T(rhs);
+    auto* value = new T(rhs);
     bool p_success = point_index_.Put(key, value);
     if (!p_success) delete value;
     return true;
   }
 
-  bool Put(const std::string_view key, T&& rhs) override final {
-    return Put(key, rhs);
-  }
-
-  void ForcePutBlankEntry(const std::string_view key) override final {
+  void ForcePutBlankEntry(const std::string_view key,
+                          PredicateSetType* predicate_set) override final {
     auto* new_entry = new T();
-    if (!point_index_.Put(key, new_entry))
+    if (!point_index_.Put(key, new_entry)) {
       delete new_entry;  // already inserted
-    insert_or_delete_key_set_.Add({key, false});
+      return;
+    }
+    auto* n = insert_or_delete_key_set_.Add({key, false});
+    if (predicate_set) predicate_set->push_back(n);
   }
 
   /**
@@ -144,16 +203,12 @@ class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
    */
   std::optional<size_t> Scan(
       const std::string_view begin, const std::string_view end,
+      PredicateSetType* predicate_set,
       std::function<bool(std::string_view, T&)> operation) override final {
-    return Scan(begin, end, [&](std::string_view key) {
+    return Scan(begin, end, predicate_set, [&](std::string_view key) {
       auto* value = Get(key);
       return operation(key, *value);
     });
-  }
-
-  bool ReScan(const std::string_view begin,
-              const std::string_view end) override final {
-    return !IsOverlapWithInsertOrDelete(begin, end);
   }
 
   /**
@@ -162,6 +217,7 @@ class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
    */
   std::optional<size_t> Scan(
       const std::string_view b, const std::string_view e,
+      PredicateSetType* predicate_set,
       std::function<bool(std::string_view)> operation) override final {
     const auto begin = std::string(b);
     const auto end   = std::string(e);
@@ -170,11 +226,19 @@ class OpenBwTreeWithPrecisionLockingIndex final : public IndexBase<T> {
     {
       if (IsOverlapWithInsertOrDelete(b, e)) { return std::nullopt; }
       if constexpr (OPT == BwOption::Pessimistic) {
-        predicate_list_.Add({b, e});
-        if (IsOverlapWithInsertOrDelete(b, e)) { return std::nullopt; }
+        auto* n = predicate_list_.Add({b, e});
+        if (predicate_set) predicate_set->push_back(n);
+        if (IsOverlapWithInsertOrDelete(b, e)) {
+          return std::nullopt;
+        }
       }
     }
-    return bw_tree_.Scan(begin, end, operation);
+    return bw_tree_.Scan(begin, end, predicate_set, operation);
+  }
+
+  bool ReScan(const std::string_view begin,
+              const std::string_view end) override final {
+    return !IsOverlapWithInsertOrDelete(begin, end);
   }
 
   void ForEach(std::function<bool(std::string_view, T&)> f) override final {

@@ -17,6 +17,7 @@
 #include "concurrent_table.h"
 
 #include <functional>
+#include <memory>
 
 #include "index/open_bw_tree/index.hpp"
 #include "index/open_bw_tree_w_pli/index.hpp"
@@ -30,14 +31,6 @@ namespace Index {
 
 ConcurrentTable::ConcurrentTable(Config config, WriteSetType recovery_set) {
   switch (config.index_structure) {
-    case Config::IndexStructure::HashTableWithPrecisionLockingIndex:
-      index_ = std::make_unique<
-          HashTableWithPrecisionLockingIndex<DataItem, Option::Pessimistic>>();
-      break;
-    case Config::IndexStructure::HashTableWithOptimisticPrecisionLockingIndex:
-      index_ = std::make_unique<
-          HashTableWithPrecisionLockingIndex<DataItem, Option::Optimistic>>();
-      break;
     case Config::IndexStructure::OpenBwTree:
       index_ = std::make_unique<OpenBwTreeIndex<DataItem>>();
       break;
@@ -50,24 +43,23 @@ ConcurrentTable::ConcurrentTable(Config config, WriteSetType recovery_set) {
           DataItem, BwOption::Optimistic>>();
       break;
     default:
-      index_ = std::make_unique<OpenBwTreeIndex<DataItem>>();
+      index_ =
+          std::make_unique<OpenBwTreeWithPrecisionLockingIndex<DataItem>>();
       break;
   }
 
   if (recovery_set.empty()) return;
-  for (auto& entry : recovery_set) {
-    index_->Put(entry.key, *entry.index_cache);
-  }
 }
 
 DataItem* ConcurrentTable::Get(const std::string_view key) {
   return index_->Get(key);
 }
 
-DataItem* ConcurrentTable::GetOrInsert(const std::string_view key) {
+DataItem* ConcurrentTable::GetOrInsert(const std::string_view key,
+                                       PredicateSetType* predicate_set) {
   auto* item = index_->Get(key);
   if (item == nullptr) {
-    index_->ForcePutBlankEntry(key);
+    index_->ForcePutBlankEntry(key, predicate_set);
     item = index_->Get(key);
     assert(item != nullptr);
   }
@@ -75,8 +67,9 @@ DataItem* ConcurrentTable::GetOrInsert(const std::string_view key) {
 }
 
 // return false if a corresponding entry already exists
-bool ConcurrentTable::Put(const std::string_view key, DataItem&& rhs) {
-  return index_->Put(key, std::forward<decltype(rhs)>(rhs));
+bool ConcurrentTable::Put(const std::string_view key, const DataItem& rhs,
+                          PredicateSetType* p) {
+  return index_->Put(key, std::forward<decltype(rhs)>(rhs), p);
 }
 
 void ConcurrentTable::ForEach(
@@ -86,14 +79,16 @@ void ConcurrentTable::ForEach(
 
 std::optional<size_t> ConcurrentTable::Scan(
     const std::string_view begin, const std::string_view end,
+    PredicateSetType* predicate_set,
     std::function<bool(std::string_view)> operation) {
-  return index_->Scan(begin, end, operation);
+  return index_->Scan(begin, end, predicate_set, operation);
 };
 
 std::optional<size_t> ConcurrentTable::Scan(
     const std::string_view begin, const std::string_view end,
+    PredicateSetType* predicate_set,
     std::function<bool(std::string_view, DataItem&)> operation) {
-  return index_->Scan(begin, end, operation);
+  return index_->Scan(begin, end, predicate_set, operation);
 };
 
 bool ConcurrentTable::ReScan(const std::string_view begin,

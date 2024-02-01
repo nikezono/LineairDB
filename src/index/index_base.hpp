@@ -22,6 +22,8 @@
 #include <optional>
 #include <string_view>
 
+#include "types/snapshot.hpp"
+
 namespace LineairDB {
 
 namespace Index {
@@ -31,9 +33,9 @@ class IndexBase {
  public:
   virtual ~IndexBase() {}
   virtual T* Get(const std::string_view)                            = 0;
-  virtual bool Put(const std::string_view, T&&)                     = 0;
-  virtual bool Put(const std::string_view, const T&)                = 0;
-  virtual void ForcePutBlankEntry(const std::string_view)           = 0;
+  virtual bool Put(const std::string_view, const T&, PredicateSetType*) = 0;
+  virtual void ForcePutBlankEntry(const std::string_view,
+                                  PredicateSetType*) = 0;
   virtual void ForEach(std::function<bool(std::string_view, T&)> f) = 0;
 
   /**
@@ -48,10 +50,12 @@ class IndexBase {
    */
   virtual std::optional<size_t> Scan(
       const std::string_view begin, const std::string_view end,
+      PredicateSetType* predicate_set,
       std::function<bool(std::string_view)> operation) = 0;
 
   virtual std::optional<size_t> Scan(
       const std::string_view begin, const std::string_view end,
+      PredicateSetType* predicate_set,
       std::function<bool(std::string_view, T&)> operation) = 0;
 
   virtual bool ReScan(const std::string_view, const std::string_view) = 0;

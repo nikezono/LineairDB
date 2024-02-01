@@ -87,6 +87,7 @@ class Transaction::Impl {
 
   ReadSetType read_set_;
   WriteSetType write_set_;
+  PredicateSetType predicate_set_;
 };
 }  // namespace LineairDB
 #endif /* LINEAIRDB_TRANSACTION_IMPL_H */

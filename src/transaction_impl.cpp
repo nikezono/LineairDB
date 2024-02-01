@@ -31,6 +31,8 @@
 #include "database_impl.h"
 #include "types/snapshot.hpp"
 
+#include "index/open_bw_tree_w_pli/index.hpp"
+
 namespace LineairDB {
 
 Transaction::Impl::Impl(Database::Impl* db_pimpl) noexcept
@@ -122,7 +124,7 @@ void Transaction::Impl::Write(const std::string_view key,
     return;
   }
 
-  auto* index_leaf = db_pimpl_->GetIndex().GetOrInsert(key);
+  auto* index_leaf = db_pimpl_->GetIndex().GetOrInsert(key, &predicate_set_);
 
   concurrency_control_->Write(key, value, size, index_leaf);
   Snapshot sp(key, value, size, index_leaf);
@@ -135,12 +137,12 @@ const std::optional<size_t> Transaction::Impl::Scan(
     std::function<bool(std::string_view,
                        const std::pair<const void*, const size_t>)>
         operation) {
-  auto result =
-      db_pimpl_->GetIndex().Scan(begin, end, [&](std::string_view key) {
-        const auto read_result = Read(key);
-        if (IsAborted()) return true;
-        return operation(key, read_result);
-      });
+  auto result = db_pimpl_->GetIndex().Scan(begin, end, &predicate_set_,
+                                           [&](std::string_view key) {
+                                             const auto read_result = Read(key);
+                                             if (IsAborted()) return true;
+                                             return operation(key, read_result);
+                                           });
   if (!result.has_value()) { Abort(); }
   return result;
 };
@@ -150,6 +152,15 @@ void Transaction::Impl::Abort() {
     current_status_ = TxStatus::Aborted;
     concurrency_control_->Abort();
     concurrency_control_->PostProcessing(TxStatus::Aborted);
+
+    for (void* ptr : predicate_set_) {
+      auto* casted = reinterpret_cast<Index::InsertOrDeleteEvent*>(
+          ptr);  // the first entry of this pointer is the same for all possible
+                 // types (predicate or insert/delete)
+
+      assert(casted->status == Index::Status::Running);
+      casted->status = Index::Status::Aborted;
+    }
   }
 }
 bool Transaction::Impl::Precommit() {
@@ -160,6 +171,16 @@ bool Transaction::Impl::Precommit() {
        db_pimpl_->IsNeedToCheckpointing(
            db_pimpl_->epoch_framework_.GetMyThreadLocalEpoch()));
   bool committed = concurrency_control_->Precommit(need_to_checkpoint);
+
+  for (void* ptr : predicate_set_) {
+    auto* casted = reinterpret_cast<Index::InsertOrDeleteEvent*>(
+        ptr);  // the first entry of this pointer is the same for all possible
+               // types (predicate or insert/delete)
+
+    assert(casted->status == Index::Status::Running);
+    casted->status = Index::Status::Committed;
+  }
+
   return committed;
 }
 

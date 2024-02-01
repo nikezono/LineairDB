@@ -239,7 +239,7 @@ class Database::Impl {
       highest_epoch = std::max(
           highest_epoch, entry.data_item_copy.transaction_id.load().epoch);
 
-      index_.Put(entry.key, std::move(entry.data_item_copy));
+      index_.Put(entry.key, std::move(entry.data_item_copy), nullptr);
     }
     SPDLOG_DEBUG("  Global epoch is resumed from {0}", highest_epoch);
     epoch_framework_.SetGlobalEpoch(highest_epoch);

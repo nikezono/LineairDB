@@ -33,15 +33,27 @@
 #include "lineairdb/config.h"
 #include "spdlog/spdlog.h"
 
+#include "index/open_bw_tree_w_pli/index.hpp"
+
 const std::string CHARACTERS =
     "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
 constexpr auto PopulationSize = 100000;
 
+using Predicate = LineairDB::Index::Predicate;
+using Status = LineairDB::Index::Status;
+
 template <typename T>
 void Population(T& index) {
+  std::vector<void*> pred_set;
   for (auto i = 0; i < PopulationSize; i++) {
-    index.GetOrInsert(std::to_string(i));
+    index.Put(std::to_string(i), {}, &pred_set);
+  }
+
+  for (void* pred : pred_set) {
+    auto* casted = reinterpret_cast<Predicate*>(pred);
+    assert(casted->status == Status::Running);
+    casted->status = Status::Committed;
   }
 }
 struct Result {
@@ -73,6 +85,7 @@ Result Benchmark(T& index, std::string benchmark_type, std::string structure,
       std::uniform_int_distribution<> dist(0, 99);
       std::uniform_int_distribution<> dist_for_populated(0, PopulationSize);
       std::uniform_int_distribution<> random_string(0, CHARACTERS.size() - 1);
+      std::vector<void*> predicate_set;
 
       count_down_latch++;
 
@@ -83,6 +96,14 @@ Result Benchmark(T& index, std::string benchmark_type, std::string structure,
           total_insert_aborts.fetch_add(operation_insert_aborts);
           break;
         };
+
+        // GC
+        for (void* pred : predicate_set) {
+          auto* casted = reinterpret_cast<Predicate*>(pred);
+          assert(casted->status == Status::Running);
+          casted->status = Status::Committed;
+        }
+        predicate_set.clear();
 
         const auto r                 = static_cast<size_t>(dist(engine));
         const bool is_scan_operation = r < proportion;
@@ -113,7 +134,7 @@ Result Benchmark(T& index, std::string benchmark_type, std::string structure,
           size_t hit    = 0;
           auto last_key = end;
           if (structure == "PLI" || structure == "OpenBw+PLI") {
-            auto result = index.Scan(begin, end, [&](auto key) {
+            auto result = index.Scan(begin, end, &predicate_set, [&](auto key) {
               hit++;
               if (limit <= hit) {
                 last_key = key;
@@ -131,7 +152,7 @@ Result Benchmark(T& index, std::string benchmark_type, std::string structure,
               operation_scan_aborts++;
             }
           } else if (structure == "OPLI" || structure == "OpenBw+OPLI") {
-            auto result = index.Scan(begin, end, [&](auto key) {
+            auto result = index.Scan(begin, end, &predicate_set, [&](auto key) {
               hit++;
               if (limit <= hit) {
                 last_key = key;
@@ -155,7 +176,7 @@ Result Benchmark(T& index, std::string benchmark_type, std::string structure,
 
           } else if (structure == "OpenBwTree") {
             std::unordered_set<decltype(begin)> hit_keys;
-            index.Scan(begin, end, [&](auto key) {
+            index.Scan(begin, end, &predicate_set, [&](auto key) {
               hit++;
               hit_keys.emplace(key);
               if (limit <= hit) {
@@ -172,7 +193,7 @@ Result Benchmark(T& index, std::string benchmark_type, std::string structure,
 
             // Fence;
             bool phantom = false;
-            index.Scan(begin, last_key, [&](auto key) {
+            index.Scan(begin, last_key, &predicate_set, [&](auto key) {
               if (hit_keys.count(std::string(key)) == 0) {
                 phantom = true;
                 return true;
@@ -209,7 +230,7 @@ Result Benchmark(T& index, std::string benchmark_type, std::string structure,
               SPDLOG_ERROR("Populated but not exist {}", key);
               exit(EXIT_FAILURE);
             }
-            success = index.Put(key, {});
+            success = index.Put(key, {}, &predicate_set);
           }
           if (success) {
             operation_succeed++;

@@ -64,7 +64,8 @@ class OpenBwTreeIndex final : public IndexBase<T> {
   /**
    * @note return false if a phantom anomaly has detected.
    */
-  bool Put(const std::string_view key, const T& rhs) override final {
+  bool Put(const std::string_view key, const T& rhs,
+           PredicateSetType*) override final {
     PreHook();
     const auto k      = std::string(key);
     auto new_item     = new DataItem(rhs);
@@ -76,26 +77,24 @@ class OpenBwTreeIndex final : public IndexBase<T> {
     return result;
   }
 
-  bool Put(const std::string_view key, T&& rhs) override final {
+  void ForcePutBlankEntry(const std::string_view key,
+                          PredicateSetType* predicates) override final {
     PreHook();
-    return Put(key, rhs);
-  }
-
-  void ForcePutBlankEntry(const std::string_view key) override final {
-    PreHook();
-    Put(key, DataItem{});
+    Put(key, DataItem{}, predicates);
   }
 
   std::optional<size_t> Scan(
       const std::string_view begin, const std::string_view end,
+      PredicateSetType* pred,
       std::function<bool(std::string_view)> operation) override final {
     PreHook();
-    return Scan(begin, end,
+    return Scan(begin, end, pred,
                 [&](std::string_view key, T&) { return operation(key); });
   }
 
   std::optional<size_t> Scan(
       const std::string_view begin, const std::string_view end,
+      PredicateSetType*,
       std::function<bool(std::string_view, T&)> operation) override final {
     PreHook();
     const auto b = std::string(begin);
