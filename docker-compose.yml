@@ -1,0 +1,16 @@
+version: "3.8"
+
+services:
+  lineairdb-dev:
+    build: .
+    container_name: lineairdb-linux-dev
+    volumes:
+      - .:/app
+      - build-cache:/app/build
+    working_dir: /app
+    stdin_open: true
+    tty: true
+    command: bash
+
+volumes:
+  build-cache:

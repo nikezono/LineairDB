@@ -7,23 +7,13 @@ on:
     branches: [main]
 
 jobs:
-  build:
-    strategy:
-      fail-fast: true
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-        compiler: [g++, clang++]
-        build: [Debug, Release]
-
-    runs-on: ${{ matrix.os }}
+  docker-build-and-test:
+    runs-on: ubuntu-latest
     timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
-      # install dependencies
-      - name: install dependencies (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        run: sudo apt update && sudo apt install -yq libnuma-dev
+
       - name: checkout submodules
         shell: bash
         run: |
@@ -31,40 +21,20 @@ jobs:
           git submodule sync --recursive
           git -c "http.extraheader=$auth_header" -c protocol.version=2 submodule update --init --force --recursive --depth=1
 
-      - name: ${{ matrix.build }} build
-        env:
-          CXX: ${{ matrix.compiler }}
-          BUILDTYPE: ${{ matrix.build }}
+      - name: Build Docker image
         run: |
-          mkdir -p build; cd $_
-          cmake .. -DCMAKE_BUILD_TYPE=$(echo $BUILDTYPE)
-          make
-          sudo make install
+          docker build -t lineairdb:latest .
 
-      - name: Set core dump
-        if: matrix.os != 'macos-latest'
+      - name: Run tests in Docker
         run: |
-          sudo mkdir -p /cores
-          ulimit -c unlimited
-          echo '/cores/core.%h.%e.%t' | sudo tee -a /proc/sys/kernel/core_pattern
+          docker run --rm -v $(pwd):/app -w /app/build lineairdb:latest ctest -V
 
-      - name: ${{ matrix.build }} test
+      - name: Build and run example in Docker
         run: |
-          cd build
-          ctest -V
-
-      - name: ${{ matrix.build }} build example/example.cpp
-        env:
-          CXX: ${{ matrix.compiler }}
-          BUILDTYPE: ${{ matrix.build }}
-        run: |
-          mkdir -p example/build; cd $_
-          cmake .. -DCMAKE_BUILD_TYPE=$(echo $BUILDTYPE)
-          make
-          ./lineairdb-example
-
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: core
-          path: /cores
+          docker run --rm -v $(pwd):/app -w /app lineairdb:latest bash -c "
+            cd example &&
+            mkdir -p build && cd build &&
+            cmake .. -DCMAKE_BUILD_TYPE=Release &&
+            make &&
+            ./lineairdb-example
+          "

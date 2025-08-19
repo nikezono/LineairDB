@@ -77,14 +77,6 @@ cmake -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release .. && make && sudo make 
 
 Then you can use LineairDB by including the header `lineairdb/lineairdb.h`.
 
-### Compatibility
-
-We have been tested LineairDB in the following environments:
-
-- Apple clang version 11.0.3
-- Clang >= 6 on Linux
-- GCC >= 7.5
-
 ### Documentation
 
 [The LineairDB library documentation](https://lineairdb.github.io/LineairDB/) is available.
