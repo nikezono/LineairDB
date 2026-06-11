@@ -116,7 +116,7 @@ class Database::Impl {
           }
           const auto current_epoch = epoch_framework_.GetMyThreadLocalEpoch();
           callback_manager_.Enqueue(std::move(callback), current_epoch);
-          if (config_.enable_logging) {
+          if (checkpoint_manager_.IsWAL()) {
             logger_.Enqueue(tx.tx_pimpl_->write_set_, current_epoch);
           }
         } else {
@@ -154,7 +154,7 @@ class Database::Impl {
       const auto current_epoch = epoch_framework_.GetMyThreadLocalEpoch();
       callback_manager_.Enqueue(std::move(clbk), current_epoch, true);
 
-      if (config_.enable_logging) {
+      if (checkpoint_manager_.IsWAL()) {
         logger_.Enqueue(tx.tx_pimpl_->write_set_, current_epoch, true);
       }
 
@@ -164,7 +164,7 @@ class Database::Impl {
     }
     epoch_framework_.MakeMeOffline();
 
-    if (config_.enable_checkpointing) {
+    if (checkpoint_manager_.IsFullScanCheckpoint()) {
       auto checkpoint_completed =
           checkpoint_manager_.GetCheckpointCompletedEpoch();
       logger_.TruncateLogs(checkpoint_completed);
@@ -216,8 +216,10 @@ class Database::Impl {
   // NOTE: Called by a special thread managed by EpochFramework.
   std::function<void(EpochNumber)> EventsOnEpochIsUpdated() {
     return [&](EpochNumber old_epoch) {
-      // Logging
-      if (config_.enable_logging) {
+      if (checkpoint_manager_.IsCAC()) {
+        checkpoint_manager_.RotateDirtySets(old_epoch);
+      }
+      if (checkpoint_manager_.IsWAL()) {
         EpochNumber durable_epoch = logger_.FlushDurableEpoch();
         thread_pool_.EnqueueForAllThreads(
             [&, old_epoch]() { logger_.FlushLogs(old_epoch); });
@@ -228,11 +230,17 @@ class Database::Impl {
 
       // Execute Callbacks
       thread_pool_.EnqueueForAllThreads([&, old_epoch]() {
-        callback_manager_.ExecuteCallbacks(old_epoch);
-        latest_callbacked_epoch_.store(old_epoch);
+        if (checkpoint_manager_.IsCAC()) {
+          const auto durable = checkpoint_manager_.GetDurableEpoch();
+          callback_manager_.ExecuteCallbacks(durable);
+          latest_callbacked_epoch_.store(durable);
+        } else {
+          callback_manager_.ExecuteCallbacks(old_epoch);
+          latest_callbacked_epoch_.store(old_epoch);
+        }
       });
 
-      if (config_.enable_checkpointing) {
+      if (checkpoint_manager_.IsFullScanCheckpoint()) {
         auto checkpoint_completed =
             checkpoint_manager_.GetCheckpointCompletedEpoch();
 
@@ -251,10 +259,6 @@ class Database::Impl {
     });
   }
 
-  bool IsNeedToCheckpointing(const EpochNumber epoch) {
-    return checkpoint_manager_.IsNeedToCheckpointing(epoch);
-  }
-
   bool CreateTable(const std::string_view table_name) {
     return table_dictionary_.CreateTable(table_name, epoch_framework_, config_);
   }
@@ -266,11 +270,22 @@ class Database::Impl {
  private:
   void Recovery() {
     SPDLOG_INFO("Start recovery process");
-    // Start recovery from logfiles
     EpochNumber highest_epoch = 1;
-    const auto durable_epoch = logger_.GetDurableEpochFromLog();
-    SPDLOG_DEBUG("  Durable epoch is resumed from {0}", highest_epoch);
-    logger_.SetDurableEpoch(durable_epoch);
+    EpochNumber durable_epoch = 0;
+    WriteSetType recovery_sets;
+
+    if (checkpoint_manager_.IsCAC()) {
+      durable_epoch = checkpoint_manager_.RecoverDurableEpoch();
+      SPDLOG_DEBUG("  (incremental) Durable epoch is resumed from {0}",
+                   durable_epoch);
+      recovery_sets = checkpoint_manager_.GetRecoverySetFromLogs();
+    } else {
+      durable_epoch = logger_.GetDurableEpochFromLog();
+      SPDLOG_DEBUG("  Durable epoch is resumed from {0}", durable_epoch);
+      logger_.SetDurableEpoch(durable_epoch);
+      recovery_sets = logger_.GetRecoverySetFromLogs(durable_epoch);
+    }
+
     [[maybe_unused]] auto enqueued = thread_pool_.EnqueueForAllThreads(
         [&]() { logger_.RememberMe(durable_epoch); });
     assert(enqueued);
@@ -281,7 +296,6 @@ class Database::Impl {
     epoch_framework_.SetMyThreadLocalEpoch(durable_epoch);
 
     highest_epoch = std::max(highest_epoch, durable_epoch);
-    auto&& recovery_sets = logger_.GetRecoverySetFromLogs(durable_epoch);
 
     for (auto& recovery_set : recovery_sets) {
       // Skip deleted entries (tombstones with size=0)
@@ -308,14 +322,13 @@ class Database::Impl {
     SPDLOG_INFO("Finish recovery process");
   }
 
- private:
   Config config_;
   Recovery::Logger logger_;
   Callback::CallbackManager callback_manager_;
   EpochFramework epoch_framework_;
   TableDictionary table_dictionary_;
   std::atomic<EpochNumber> latest_callbacked_epoch_{1};
-  Recovery::CPRManager checkpoint_manager_;
+  Recovery::CheckpointManager checkpoint_manager_;
   ThreadPool thread_pool_;
 };
 

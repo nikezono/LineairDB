@@ -107,29 +107,25 @@ struct Config {
 
   /**
    * @brief
-   * If true, LineairDB performs logging for recovery.
+   * Durability strategy for LineairDB.
    *
-   * Default: true
-   */
-  bool enable_logging = true;
-
-  /**
-   * @brief
-   * If true, LineairDB performs logging for checkpoint-recovery.
-   * Checkpointing prevents the log file size from increasing monotonically.
-   * i.e, if this parameter is set to false, The disk space used by LineairDB is
-   * unbounded.
-   * You can also turn off enable_logging and use only Checkpointing.
-   * This configure gives the recoverability property called CPR-consistency
-   * [1]. CPR-consitency may volatilize the data of committed transactions at
-   * last the number of seconds specified at checkpoint_period; however, the
-   * persistence of the data before that time is guaranteed.
+   * - None:                  No durability guarantee.
+   * - WAL:                   Write-ahead logging only. Unbounded log file size.
+   * - Checkpoint:            Full-scan checkpointing only (CPR-consistency).
+   * - CheckpointAndWAL:      Full-scan checkpointing + WAL (default).
+   * - CAC:                   Commit-After-Checkpointing. Bounded log file size,
+   *                          and full consistency guarantee.
    *
-   * Default: true
-   * @ref [1]:
-   * https://www.microsoft.com/en-us/research/uploads/prod/2019/01/cpr-sigmod19.pdf
+   * Default: CheckpointAndWAL
    */
-  bool enable_checkpointing = true;
+  enum class DurabilityStrategy {
+    None,
+    WAL,
+    Checkpoint,
+    CheckpointAndWAL,
+    CAC,
+  };
+  DurabilityStrategy durability = DurabilityStrategy::CheckpointAndWAL;
 
   /**
    * @brief

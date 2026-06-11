@@ -27,6 +27,7 @@
 #include "concurrency_control/pivot_object.hpp"
 #include "data_buffer.hpp"
 #include "lock/impl/readers_writers_lock.hpp"
+#include "types/definitions.h"
 #include "types/transaction_id.hpp"
 #include "util/logger.hpp"
 
@@ -39,6 +40,8 @@ struct DataItem {
   DataBuffer checkpoint_buffer;                     // a.k.a. stable version
   std::atomic<NWRPivotObject> pivot_object;         // for NWR
   Lock::ReadersWritersLockBO readers_writers_lock;  // for 2PL
+  std::atomic<EpochNumber> dirty_epoch;
+  std::atomic<EpochNumber> stable_epoch;
 
   std::byte* value() { return &buffer.value[0]; }
   const std::byte* value() const { return &buffer.value[0]; }
@@ -46,20 +49,32 @@ struct DataItem {
   bool IsInitialized() const { return initialized; }
 
   DataItem()
-      : transaction_id(0), initialized(false), pivot_object(NWRPivotObject()) {}
+      : transaction_id(0),
+        initialized(false),
+        pivot_object(NWRPivotObject()),
+        dirty_epoch(0),
+        stable_epoch(0) {}
   DataItem(const std::byte* v, size_t s, TransactionId tid = 0)
-      : transaction_id(tid), initialized(true), pivot_object(NWRPivotObject()) {
+      : transaction_id(tid),
+        initialized(true),
+        pivot_object(NWRPivotObject()),
+        dirty_epoch(0),
+        stable_epoch(0) {
     Reset(v, s);
   }
   DataItem(const DataItem& rhs)
       : transaction_id(rhs.transaction_id.load()),
         initialized(rhs.initialized),
-        pivot_object(NWRPivotObject()) {
+        pivot_object(NWRPivotObject()),
+        dirty_epoch(rhs.dirty_epoch.load()),
+        stable_epoch(rhs.stable_epoch.load()) {
     buffer.Reset(rhs.buffer);
   }
   DataItem& operator=(const DataItem& rhs) {
     transaction_id.store(rhs.transaction_id.load());
     initialized = rhs.initialized;
+    dirty_epoch.store(rhs.dirty_epoch.load());
+    stable_epoch.store(rhs.stable_epoch.load());
     if (initialized) {
       buffer.Reset(rhs.buffer);
     }
@@ -73,9 +88,7 @@ struct DataItem {
   }
 
   void CopyLiveVersionToStableVersion() {
-    if (!checkpoint_buffer.IsEmpty()) return;  // snapshot is already taken
-    // There is an assumption that this thread can `exclusively` access this
-    // data item.
+    if (!checkpoint_buffer.IsEmpty()) return;
     checkpoint_buffer.Reset(buffer);
   }
 
