@@ -27,6 +27,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <unordered_map>
 #include <set>
 #include <thread>
 
@@ -60,10 +61,9 @@ int main(int argc, char** argv) {
        cxxopts::value<std::string>()->default_value("a"))  //
       ("c,cc", "Concurrency control protocol",
        cxxopts::value<std::string>()->default_value("SiloNWR"))  //
-      ("l,log", "Enable logging",
-       cxxopts::value<bool>()->default_value("false"))  //
-      ("P,checkpoint", "Enable checkpointing",
-       cxxopts::value<bool>()->default_value("false"))  //
+      ("d,durability",
+       "Durability strategy: none, wal, checkpoint, checkpoint_wal, cac",
+       cxxopts::value<std::string>()->default_value("none"))  //
       ("i,checkpoint_interval", "Checkpoint interval",
        cxxopts::value<size_t>()->default_value("30"))  //
       ("r,rehash_threshold", "Rehash threshold of the hash index (percent)",
@@ -82,7 +82,7 @@ int main(int argc, char** argv) {
       ("H,handler",
        "Use handler interface: queueing threads also execute transactions",
        cxxopts::value<bool>()->default_value("false"))  //
-      ("d,duration", "Measurement duration of this benchmark (milliseconds)",
+      ("D,duration", "Measurement duration of this benchmark (milliseconds)",
        cxxopts::value<size_t>()->default_value("2000"))  //
       ("o,output", "Output JSON filename",
        cxxopts::value<std::string>()->default_value("ycsb_result.json"))  //
@@ -100,8 +100,23 @@ int main(int argc, char** argv) {
   LineairDB::Config config;
   auto protocol = result["cc"].as<std::string>();
   config.concurrency_control_protocol = Protocols.find(protocol)->second;
+  static const std::unordered_map<std::string, LineairDB::Config::DurabilityStrategy> Durabilities = {
+    {"none",           LineairDB::Config::DurabilityStrategy::None},
+    {"wal",            LineairDB::Config::DurabilityStrategy::WAL},
+    {"checkpoint",     LineairDB::Config::DurabilityStrategy::Checkpoint},
+    {"checkpoint_wal", LineairDB::Config::DurabilityStrategy::CheckpointAndWAL},
+    {"cac",            LineairDB::Config::DurabilityStrategy::CAC},
+  };
   config.enable_recovery = false;
-  config.enable_logging = result["log"].as<bool>();
+  {
+    auto d = result["durability"].as<std::string>();
+    auto it = Durabilities.find(d);
+    if (it == Durabilities.end()) {
+      std::cerr << "Unknown durability strategy: " << d << std::endl;
+      exit(1);
+    }
+    config.durability = it->second;
+  }
   config.max_thread = result["thread"].as<size_t>();
   config.epoch_duration_ms = result["epoch"].as<size_t>();
   config.checkpoint_period = result["checkpoint_interval"].as<size_t>();

@@ -121,17 +121,18 @@ class TwoPhaseLockingImpl final : public ConcurrencyControlBase {
       PostProcessing(TxStatus::Aborted);
     }
   };
-  bool Precommit(bool need_to_checkpoint) final override {
-    if (need_to_checkpoint) {
-      for (auto& snapshot : tx_ref_.write_set_ref_) {
-        snapshot.index_cache->CopyLiveVersionToStableVersion();
-      }
-    }
-
+  bool Precommit() final override {
+    tx_ref_.checkpoint_manager_ref_.OnPrecommit(
+        tx_ref_.write_set_ref_,
+        tx_ref_.epoch_framework_ref_.GetMyThreadLocalEpoch());
     return true;
   };
 
-  void PostProcessing(TxStatus) final override { UnlockAll(); }
+  void PostProcessing(TxStatus status) final override {
+    if (status == TxStatus::Aborted)
+      tx_ref_.checkpoint_manager_ref_.OnAbort(tx_ref_.write_set_ref_);
+    UnlockAll();
+  }
 
  private:
   void Undo() {
