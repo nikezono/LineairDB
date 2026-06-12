@@ -68,6 +68,8 @@ class CACManager {
         checkpoint_epoch_(0),
         durable_epoch_(0),
         stop_(false),
+        last_checkpoint_time_(std::chrono::high_resolution_clock::now()),
+        has_dirty_writes_(false),
         dep_file_(config.work_dir + "/incremental_durable_epoch.log"),
         dep_working_(config.work_dir +
                      "/incremental_durable_epoch.working.log") {
@@ -93,7 +95,22 @@ class CACManager {
     if (compactor_thread_.joinable()) compactor_thread_.join();
   }
 
-  void RotateDirtySets(EpochNumber next_checkpoint_epoch) {
+  void RotateDirtySets(EpochNumber next_checkpoint_epoch, bool force = false) {
+    if (!has_dirty_writes_.load()) {
+      durable_epoch_.store(next_checkpoint_epoch);
+      return;
+    }
+
+    if (!force) {
+      auto now = std::chrono::high_resolution_clock::now();
+      auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_checkpoint_time_).count();
+      if (elapsed < static_cast<long long>(config_.checkpoint_period)) {
+        return;
+      }
+      last_checkpoint_time_ = now;
+    }
+    has_dirty_writes_.store(false);
+
     checkpoint_epoch_.store(next_checkpoint_epoch);
     bool has_dirty = false;
     tls_.ForEach([&](DirtySet* ds) {
@@ -211,8 +228,11 @@ class CACManager {
     auto* ds = tls_.Get();
     if (item->dirty_epoch.load() < current_epoch) {
       item->dirty_epoch.store(current_epoch);
-      std::lock_guard<std::mutex> lock(ds->latch);
-      ds->dirty_live.push_back({table_name, key, item});
+      {
+        std::lock_guard<std::mutex> lock(ds->latch);
+        ds->dirty_live.push_back({table_name, key, item});
+      }
+      has_dirty_writes_.store(true);
     }
   }
 
@@ -343,7 +363,7 @@ class CACManager {
 
   void WriteRemainingDirtyEntries() {
     checkpoint_epoch_.store(epoch_manager_ref_.GetGlobalEpoch());
-    RotateDirtySets(checkpoint_epoch_.load());
+    RotateDirtySets(checkpoint_epoch_.load(), true);
 
     EpochNumber cp_epoch = checkpoint_epoch_.load();
     Logger::LogRecord record;
@@ -486,6 +506,8 @@ class CACManager {
   std::atomic<bool> stop_;
   std::thread manager_thread_;
   std::thread compactor_thread_;
+  std::chrono::high_resolution_clock::time_point last_checkpoint_time_;
+  std::atomic<bool> has_dirty_writes_;
 
   static constexpr std::string_view kDeltaFilePrefix = "incremental_checkpoint_";
   static constexpr std::string_view kBaseFilePrefix  = "checkpoint_base_";

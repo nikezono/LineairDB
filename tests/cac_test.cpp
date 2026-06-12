@@ -32,6 +32,7 @@ class CACTest : public ::testing::Test {
     config_.durability = LineairDB::Config::DurabilityStrategy::CAC;
     config_.enable_recovery = true;
     config_.epoch_duration_ms = 10;
+    config_.checkpoint_period = 0;
     db_ = std::make_unique<LineairDB::Database>(config_);
   }
 };
@@ -211,6 +212,7 @@ class CACCompactionTest : public ::testing::Test {
     config_.durability = LineairDB::Config::DurabilityStrategy::CAC;
     config_.enable_recovery = false;
     config_.epoch_duration_ms = 10;
+    config_.checkpoint_period = 0;
     db_ = std::make_unique<LineairDB::Database>(config_);
   }
 
