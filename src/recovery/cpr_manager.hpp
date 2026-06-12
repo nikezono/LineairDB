@@ -108,78 +108,14 @@ class CPRManager {
             }
 
             {  //  WAIT_FLUSH: save consistent snapshot
-              // Note that Phase::WAIT_FLUSH is the same with IN_PROGRESS, in
-              // practice.
-              current_phase_.store(Phase::WAIT_FLUSH);
-
-              // We now create the consistent snapshot of the end of the epoch
-              // `e+1`.
-              Recovery::Logger::LogRecords records;
-              Recovery::Logger::LogRecord record;
-              record.epoch = checkpoint_epoch_.load() + 1;
-
-              dict_ref_.ForEachTable([&](LineairDB::Table& table) {
-                table.GetPrimaryIndex().ForEach(
-                    [&](std::string_view key, LineairDB::DataItem& data_item) {
-                      data_item.ExclusiveLock();
-
-                      // Skip deleted items (not initialized)
-                      if (!data_item.IsInitialized()) {
-                        data_item.ExclusiveUnlock();
-                        return true;
-                      }
-
-                      Logger::LogRecord::KeyValuePair kvp;
-                      kvp.table_name = table.GetTableName();
-                      kvp.key = key;
-                      if (data_item.checkpoint_buffer.IsEmpty()) {
-                        // this data item holds version which has written before
-                        // the point of consistency.
-                        kvp.buffer = data_item.buffer.toString();
-                      } else {
-                        kvp.buffer = data_item.checkpoint_buffer.toString();
-                        data_item.checkpoint_buffer.Reset(nullptr, 0);
-                      }
-                      kvp.tid.epoch = record.epoch;
-                      kvp.tid.tid = 0;
-                      record.key_value_pairs.emplace_back(std::move(kvp));
-
-                      data_item.ExclusiveUnlock();
-                      return true;
-                    });
-              });
-              records.emplace_back(std::move(record));
-
-              std::ofstream new_file(
-                  CheckpointWorkingFileName,
-                  std::ios_base::out | std::ios_base::binary);
-              msgpack::pack(new_file, records);
-              new_file.flush();
-              SPDLOG_DEBUG("RENAME checkpoint workingfile from {0} to {1}",
-                           CheckpointWorkingFileName, CheckpointFileName);
-
-              // NOTE POSIX ensures that rename syscall provides atomicity
-              if (rename(CheckpointWorkingFileName.c_str(),
-                         CheckpointFileName.c_str())) {
-                SPDLOG_ERROR(
-                    "Durability Error: fail to rename checkpoint of the "
-                    "epoch "
-                    "{0:d}. "
-                    "errno: {1}",
-                    record.epoch, errno);
-                exit(1);
-              }
+              DoFinalCheckpoint();
             }
-            SPDLOG_DEBUG("FLUSH consistent snapshot of epoch {}",
-                         checkpoint_epoch_.load());
-            checkpoint_completed_epoch_.store(checkpoint_epoch_.load());
-            current_phase_.store(Phase::REST);
           }
         }) {}
 
   void Stop() {
     stop_.store(true);
-    manager_thread_.join();
+    if (manager_thread_.joinable()) manager_thread_.join();
   }
 
   EpochNumber GetCheckpointCompletedEpoch() {
@@ -195,6 +131,72 @@ class CPRManager {
   }
 
  private:
+  void DoFinalCheckpoint() {
+    current_phase_.store(Phase::WAIT_FLUSH);
+
+    // We now create the consistent snapshot of the end of the epoch `e+1`.
+    Recovery::Logger::LogRecords records;
+    Recovery::Logger::LogRecord record;
+    record.epoch = checkpoint_epoch_.load() + 1;
+
+    dict_ref_.ForEachTable([&](LineairDB::Table& table) {
+      table.GetPrimaryIndex().ForEach(
+          [&](std::string_view key, LineairDB::DataItem& data_item) {
+            data_item.ExclusiveLock();
+
+            // Skip deleted items (not initialized)
+            if (!data_item.IsInitialized()) {
+              data_item.ExclusiveUnlock();
+              return true;
+            }
+
+            Logger::LogRecord::KeyValuePair kvp;
+            kvp.table_name = table.GetTableName();
+            kvp.key = key;
+            if (data_item.checkpoint_buffer.IsEmpty()) {
+              // this data item holds version which has written before
+              // the point of consistency.
+              kvp.buffer = data_item.buffer.toString();
+            } else {
+              kvp.buffer = data_item.checkpoint_buffer.toString();
+              data_item.checkpoint_buffer.Reset(nullptr, 0);
+            }
+            kvp.tid.epoch = record.epoch;
+            kvp.tid.tid = 0;
+            record.key_value_pairs.emplace_back(std::move(kvp));
+
+            data_item.ExclusiveUnlock();
+            return true;
+          });
+    });
+    records.emplace_back(std::move(record));
+
+    std::ofstream new_file(
+        CheckpointWorkingFileName,
+        std::ios_base::out | std::ios_base::binary);
+    msgpack::pack(new_file, records);
+    new_file.flush();
+    new_file.close();
+    SPDLOG_DEBUG("RENAME checkpoint workingfile from {0} to {1}",
+                 CheckpointWorkingFileName, CheckpointFileName);
+
+    // NOTE POSIX ensures that rename syscall provides atomicity
+    if (rename(CheckpointWorkingFileName.c_str(),
+               CheckpointFileName.c_str())) {
+      SPDLOG_ERROR(
+          "Durability Error: fail to rename checkpoint of the "
+          "epoch "
+          "{0:d}. "
+          "errno: {1}",
+          record.epoch, errno);
+      exit(1);
+    }
+    SPDLOG_DEBUG("FLUSH consistent snapshot of epoch {}",
+                 checkpoint_epoch_.load());
+    checkpoint_completed_epoch_.store(checkpoint_epoch_.load());
+    current_phase_.store(Phase::REST);
+  }
+
   const LineairDB::Config& config_ref_;
   LineairDB::TableDictionary& dict_ref_;
   LineairDB::EpochFramework& epoch_manager_ref_;

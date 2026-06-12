@@ -61,8 +61,9 @@ class CACManager {
 
  public:
   CACManager(const Config& config, TableDictionary& /*dict*/,
-             EpochFramework& /*epoch*/)
+             EpochFramework& epoch)
       : config_(config),
+        epoch_manager_ref_(epoch),
         dirty_stable_empty_(true),
         checkpoint_epoch_(0),
         durable_epoch_(0),
@@ -337,6 +338,63 @@ class CACManager {
         exit(1);
       }
     }
+    WriteRemainingDirtyEntries();
+  }
+
+  void WriteRemainingDirtyEntries() {
+    checkpoint_epoch_.store(epoch_manager_ref_.GetGlobalEpoch());
+    RotateDirtySets(checkpoint_epoch_.load());
+
+    EpochNumber cp_epoch = checkpoint_epoch_.load();
+    Logger::LogRecord record;
+    record.epoch = cp_epoch;
+
+    tls_.ForEach([&](DirtySet* ds) {
+      std::vector<DirtyEntry> local_dirty;
+      {
+        std::lock_guard<std::mutex> ds_lock(ds->latch);
+        local_dirty = std::move(ds->dirty_stable);
+        ds->dirty_stable.clear();
+      }
+      for (auto& entry : local_dirty) {
+        entry.item->ExclusiveLock();
+        if (!entry.item->IsInitialized()) {
+          entry.item->ExclusiveUnlock();
+          continue;
+        }
+        Logger::LogRecord::KeyValuePair kvp;
+        kvp.table_name = entry.table_name;
+        kvp.key = entry.key;
+        if (entry.item->stable_epoch.load() == cp_epoch &&
+            !entry.item->checkpoint_buffer.IsEmpty()) {
+          kvp.buffer = entry.item->checkpoint_buffer.toString();
+          entry.item->checkpoint_buffer.Reset(nullptr, 0);
+        } else {
+          kvp.buffer = entry.item->buffer.toString();
+        }
+        kvp.tid = {cp_epoch, 0};
+        record.key_value_pairs.emplace_back(std::move(kvp));
+        entry.item->ExclusiveUnlock();
+      }
+    });
+
+    if (!record.key_value_pairs.empty()) {
+      std::string filename = DeltaFilePath(cp_epoch);
+      std::ofstream f(filename, std::ios_base::out | std::ios_base::binary);
+      Logger::LogRecords records{std::move(record)};
+      msgpack::pack(f, records);
+      f.flush();
+    }
+    durable_epoch_.store(cp_epoch);
+    {
+      std::ofstream f(dep_working_,
+                      std::ios_base::out | std::ios_base::binary);
+      msgpack::pack(f, cp_epoch);
+      f.flush();
+    }
+    if (rename(dep_working_.c_str(), dep_file_.c_str()) != 0) {
+      // ignore or log failure on shutdown
+    }
   }
 
   void CompactorLoop() {
@@ -414,6 +472,7 @@ class CACManager {
   }
 
   const Config& config_;
+  EpochFramework& epoch_manager_ref_;
   ThreadKeyStorage<DirtySet> tls_;
   std::atomic<bool> dirty_stable_empty_;
   std::mutex worker_latch_;
