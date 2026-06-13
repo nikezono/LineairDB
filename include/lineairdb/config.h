@@ -129,13 +129,13 @@ struct Config {
 
   /**
    * @brief
-   * It uses as the interval time (seconds) for checkpointing.
+   * It uses as the interval time (milliseconds) for checkpointing.
    * The longer is the better for the performance but the larger interval time
    * causes the increasing of log file size.
    *
-   * Default: 30
+   * Default: 5000 (5 seconds)
    */
-  size_t checkpoint_period = 30;
+  size_t checkpoint_period = 5000;
 
   /**
    * @brief

@@ -102,7 +102,7 @@ class CACManager {
 
     if (!force) {
       auto now = std::chrono::high_resolution_clock::now();
-      auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                          now - last_checkpoint_time_)
                          .count();
       if (elapsed < static_cast<long long>(config_.checkpoint_period)) {

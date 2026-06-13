@@ -64,8 +64,8 @@ int main(int argc, char** argv) {
       ("d,durability",
        "Durability strategy: none, wal, checkpoint, checkpoint_wal, cac",
        cxxopts::value<std::string>()->default_value("none"))  //
-      ("i,checkpoint_interval", "Checkpoint interval",
-       cxxopts::value<size_t>()->default_value("5"))  //
+      ("i,checkpoint_interval", "Checkpoint interval (milliseconds)",
+       cxxopts::value<size_t>()->default_value("5000"))  //
       ("r,rehash_threshold", "Rehash threshold of the hash index (percent)",
        cxxopts::value<double>()->default_value("0.75"))  //
       ("s,ws", "Size of working set for each transaction",

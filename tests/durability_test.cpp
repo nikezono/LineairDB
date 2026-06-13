@@ -44,7 +44,7 @@ class DurabilityTest
     config_.durability =
         LineairDB::Config::DurabilityStrategy::CheckpointAndWAL;
     config_.enable_recovery = true;
-    config_.checkpoint_period = 1;
+    config_.checkpoint_period = 1000;
     db_ = std::make_unique<LineairDB::Database>(config_);
   }
   virtual void TearDown() {
@@ -128,7 +128,8 @@ TEST_P(DurabilityTest, RecoveryKeepsDeletedKeysAbsentEvenWithCheckpoint) {
   // Wait for checkpoint to be created.
   // The checkpoint algorithm should ignore deleted keys to be recovered.
   std::this_thread::sleep_for(
-      std::chrono::seconds(config.checkpoint_period + 5));
+      std::chrono::milliseconds(config.checkpoint_period) +
+      std::chrono::seconds(5));
 
   // Expect that recovery procedure has idempotence
   for (size_t i = 0; i < 3; i++) {
@@ -230,7 +231,8 @@ size_t getLogDirectorySize(const LineairDB::Config& conf) {
 
 TEST_P(DurabilityTest, LogFileSizeIsBounded) {  // a.k.a., checkpointing
   const LineairDB::Config config = db_->GetConfig();
-  ASSERT_EQ(config.durability, LineairDB::Config::DurabilityStrategy::CheckpointAndWAL);
+  ASSERT_EQ(config.durability,
+            LineairDB::Config::DurabilityStrategy::CheckpointAndWAL);
 
   TransactionProcedure Update([](LineairDB::Transaction& tx) {
     int value = 0xBEEF;
@@ -258,7 +260,8 @@ TEST_P(DurabilityTest, LogFileSizeIsBounded) {  // a.k.a., checkpointing
     auto now = std::chrono::high_resolution_clock::now();
     assert(begin < now);
     size_t elapsed =
-        std::chrono::duration_cast<std::chrono::seconds>(now - begin).count();
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - begin)
+            .count();
     if (config.checkpoint_period * 10 < elapsed) break;
   }
   ASSERT_FALSE(filesize_is_monotonically_increasing);
@@ -267,7 +270,8 @@ TEST_P(DurabilityTest, LogFileSizeIsBounded) {  // a.k.a., checkpointing
 TEST_P(DurabilityTest,
        LogFileSizeIsBoundedOnHandlerInterface) {  // a.k.a., checkpointing
   const LineairDB::Config config = db_->GetConfig();
-  ASSERT_EQ(config.durability, LineairDB::Config::DurabilityStrategy::CheckpointAndWAL);
+  ASSERT_EQ(config.durability,
+            LineairDB::Config::DurabilityStrategy::CheckpointAndWAL);
 
   TransactionProcedure Update([](LineairDB::Transaction& tx) {
     int value = 0xBEEF;
@@ -305,7 +309,8 @@ TEST_P(DurabilityTest,
     auto now = std::chrono::high_resolution_clock::now();
     assert(begin < now);
     size_t elapsed =
-        std::chrono::duration_cast<std::chrono::seconds>(now - begin).count();
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - begin)
+            .count();
     if (config.checkpoint_period * 10 < elapsed) break;
   }
   stop.store(true);
@@ -327,7 +332,7 @@ TEST_P(DurabilityTest, CPRConsistency) {  // a.k.a., checkpointing
 
   LineairDB::Config config = db_->GetConfig();
   config.durability = LineairDB::Config::DurabilityStrategy::Checkpoint;
-  config.checkpoint_period = 5;  // 5sec
+  config.checkpoint_period = 5000;  // 5000ms
   db_.reset(nullptr);
   db_ = std::make_unique<LineairDB::Database>(config);
 
@@ -349,7 +354,7 @@ TEST_P(DurabilityTest, CPRConsistency) {  // a.k.a., checkpointing
 
   TestHelper::DoTransactions(db_.get(), {Update});
   std::this_thread::sleep_for(
-      std::chrono::seconds(config.checkpoint_period * 2));
+      std::chrono::milliseconds(config.checkpoint_period * 2));
 
   db_.reset(nullptr);
   db_ = std::make_unique<LineairDB::Database>(config);
@@ -363,7 +368,7 @@ TEST_P(DurabilityTest,
        CPRConsistencyOnHandlerInterface) {  // a.k.a., checkpointing
   LineairDB::Config config = db_->GetConfig();
   config.durability = LineairDB::Config::DurabilityStrategy::Checkpoint;
-  config.checkpoint_period = 5;  // 5sec
+  config.checkpoint_period = 5000;  // 5000ms
   db_.reset(nullptr);
   db_ = std::make_unique<LineairDB::Database>(config);
 
@@ -386,7 +391,7 @@ TEST_P(DurabilityTest,
 
   TestHelper::DoHandlerTransactionsOnMultiThreads(db_.get(), {Update});
   std::this_thread::sleep_for(
-      std::chrono::seconds(config.checkpoint_period * 2));
+      std::chrono::milliseconds(config.checkpoint_period * 2));
 
   db_.reset(nullptr);
   db_ = std::make_unique<LineairDB::Database>(config);
@@ -438,7 +443,7 @@ TEST_P(DurabilityTest, TwoPhaseLockingDestructorGracefulShutdown) {
   LineairDB::Config config = db_->GetConfig();
   config.concurrency_control_protocol =
       LineairDB::Config::ConcurrencyControl::TwoPhaseLocking;
-  config.checkpoint_period = 1;  // 1sec
+  config.checkpoint_period = 1000;  // 1000ms
   db_.reset(nullptr);
   db_ = std::make_unique<LineairDB::Database>(config);
 
