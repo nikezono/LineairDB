@@ -27,9 +27,9 @@
 #include <fstream>
 #include <iostream>
 #include <map>
-#include <unordered_map>
 #include <set>
 #include <thread>
+#include <unordered_map>
 
 #include "workload.h"
 
@@ -65,7 +65,7 @@ int main(int argc, char** argv) {
        "Durability strategy: none, wal, checkpoint, checkpoint_wal, cac",
        cxxopts::value<std::string>()->default_value("none"))  //
       ("i,checkpoint_interval", "Checkpoint interval",
-       cxxopts::value<size_t>()->default_value("30"))  //
+       cxxopts::value<size_t>()->default_value("5"))  //
       ("r,rehash_threshold", "Rehash threshold of the hash index (percent)",
        cxxopts::value<double>()->default_value("0.75"))  //
       ("s,ws", "Size of working set for each transaction",
@@ -102,13 +102,16 @@ int main(int argc, char** argv) {
   LineairDB::Config config;
   auto protocol = result["cc"].as<std::string>();
   config.concurrency_control_protocol = Protocols.find(protocol)->second;
-  static const std::unordered_map<std::string, LineairDB::Config::DurabilityStrategy> Durabilities = {
-    {"none",           LineairDB::Config::DurabilityStrategy::None},
-    {"wal",            LineairDB::Config::DurabilityStrategy::WAL},
-    {"checkpoint",     LineairDB::Config::DurabilityStrategy::Checkpoint},
-    {"checkpoint_wal", LineairDB::Config::DurabilityStrategy::CheckpointAndWAL},
-    {"cac",            LineairDB::Config::DurabilityStrategy::CAC},
-  };
+  static const std::unordered_map<std::string,
+                                  LineairDB::Config::DurabilityStrategy>
+      Durabilities = {
+          {"none", LineairDB::Config::DurabilityStrategy::None},
+          {"wal", LineairDB::Config::DurabilityStrategy::WAL},
+          {"checkpoint", LineairDB::Config::DurabilityStrategy::Checkpoint},
+          {"checkpoint_wal",
+           LineairDB::Config::DurabilityStrategy::CheckpointAndWAL},
+          {"cac", LineairDB::Config::DurabilityStrategy::CAC},
+      };
   config.enable_recovery = false;
   {
     auto d = result["durability"].as<std::string>();

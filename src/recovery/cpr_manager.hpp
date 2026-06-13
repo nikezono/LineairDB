@@ -57,17 +57,23 @@ class CPRManager {
         stop_(false),
         manager_thread_([&]() {
           const bool enable_checkpointing =
-              config_ref_.durability == LineairDB::Config::DurabilityStrategy::Checkpoint ||
-              config_ref_.durability == LineairDB::Config::DurabilityStrategy::CheckpointAndWAL;
+              config_ref_.durability ==
+                  LineairDB::Config::DurabilityStrategy::Checkpoint ||
+              config_ref_.durability ==
+                  LineairDB::Config::DurabilityStrategy::CheckpointAndWAL;
           if (!enable_checkpointing) return;
           const auto checkpoint_period = config_ref_.checkpoint_period;
           for (;;) {
             {  // REST Phase: sleep
               auto start = std::chrono::high_resolution_clock::now();
               if (current_phase_.load() == Phase::REST) {
+                bool got_stop = false;
                 for (;;) {
                   std::this_thread::sleep_for(std::chrono::seconds(1));
-                  if (stop_.load()) return;
+                  if (stop_.load()) {
+                    got_stop = true;
+                    break;
+                  }
                   auto now = std::chrono::high_resolution_clock::now();
                   if (checkpoint_period <=
                       static_cast<size_t>(
@@ -76,40 +82,18 @@ class CPRManager {
                               .count()))
                     break;
                 }
+                if (got_stop) break;
               }
             }
 
-            {  // PREPARE to checkpointing: determine the snapshot epoch (SE)
-              epoch_manager_ref_.MakeMeOnline();
-              const auto current_epoch = epoch_manager_ref_.GetGlobalEpoch();
-              SPDLOG_DEBUG("PREPARE to checkpointing. current {}",
-                           current_epoch);
-              // NOTE:
-              // epoch framework allows that there are two types of running
-              // transactions such that txns in the epoch
-              //   1) `e-1` (global epoch is bumped but they doesn't know it)
-              //   2) `e`
-              //   2) `e+1` (global epoch was bumped simultaneously)
-              // at this time.
-              // thus we choose `e+1` as the checkpoint epoch;
-              // the end of `e+1` is the `virtual point of consistency`.
-              // Transactions that start after the point and write the new
-              // version must save before image of the point of consistency.
-              // Fortunately, now we can ensure that there are no transaction
-              // in the epoch `e+2`.
-              const auto checkpoint_epoch = current_epoch + 1;
-              checkpoint_epoch_.store(checkpoint_epoch);
-              current_phase_.store(Phase::IN_PROGRESS);
-              assert(checkpoint_epoch != 0);
-              epoch_manager_ref_.MakeMeOffline();
+            ExecuteCheckpointSequence();
+          }
 
-              // Wait for a stable epoch
-              epoch_manager_ref_.Sync();
-            }
-
-            {  //  WAIT_FLUSH: save consistent snapshot
-              DoFinalCheckpoint();
-            }
+          if (config_ref_.enable_graceful_shutdown_checkpoint) {
+            // Force a final checkpoint on shutdown (without Sync() to avoid
+            // deadlock)
+            checkpoint_epoch_.store(epoch_manager_ref_.GetGlobalEpoch());
+            DoFinalCheckpoint();
           }
         }) {}
 
@@ -131,6 +115,22 @@ class CPRManager {
   }
 
  private:
+  void ExecuteCheckpointSequence() {
+    epoch_manager_ref_.MakeMeOnline();
+    const auto current_epoch = epoch_manager_ref_.GetGlobalEpoch();
+    SPDLOG_DEBUG("PREPARE to checkpointing. current {}", current_epoch);
+    const auto checkpoint_epoch = current_epoch + 1;
+    checkpoint_epoch_.store(checkpoint_epoch);
+    current_phase_.store(Phase::IN_PROGRESS);
+    assert(checkpoint_epoch != 0);
+    epoch_manager_ref_.MakeMeOffline();
+
+    // Wait for a stable epoch
+    epoch_manager_ref_.Sync();
+
+    DoFinalCheckpoint();
+  }
+
   void DoFinalCheckpoint() {
     current_phase_.store(Phase::WAIT_FLUSH);
 
@@ -171,9 +171,8 @@ class CPRManager {
     });
     records.emplace_back(std::move(record));
 
-    std::ofstream new_file(
-        CheckpointWorkingFileName,
-        std::ios_base::out | std::ios_base::binary);
+    std::ofstream new_file(CheckpointWorkingFileName,
+                           std::ios_base::out | std::ios_base::binary);
     msgpack::pack(new_file, records);
     new_file.flush();
     new_file.close();
@@ -181,8 +180,7 @@ class CPRManager {
                  CheckpointWorkingFileName, CheckpointFileName);
 
     // NOTE POSIX ensures that rename syscall provides atomicity
-    if (rename(CheckpointWorkingFileName.c_str(),
-               CheckpointFileName.c_str())) {
+    if (rename(CheckpointWorkingFileName.c_str(), CheckpointFileName.c_str())) {
       SPDLOG_ERROR(
           "Durability Error: fail to rename checkpoint of the "
           "epoch "

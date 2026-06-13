@@ -65,7 +65,7 @@ class CACManager {
       : config_(config),
         epoch_manager_ref_(epoch),
         dirty_stable_empty_(true),
-        checkpoint_epoch_(0),
+        checkpoint_epoch_(1),
         durable_epoch_(0),
         stop_(false),
         last_checkpoint_time_(std::chrono::high_resolution_clock::now()),
@@ -74,8 +74,7 @@ class CACManager {
         dep_working_(config.work_dir +
                      "/incremental_durable_epoch.working.log") {
     std::filesystem::create_directory(config_.work_dir);
-    manager_thread_ =
-        std::thread(&CACManager::IncrementalWorkerLoop, this);
+    manager_thread_ = std::thread(&CACManager::IncrementalWorkerLoop, this);
     compactor_thread_ = std::thread(&CACManager::CompactorLoop, this);
   }
 
@@ -103,7 +102,9 @@ class CACManager {
 
     if (!force) {
       auto now = std::chrono::high_resolution_clock::now();
-      auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_checkpoint_time_).count();
+      auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                         now - last_checkpoint_time_)
+                         .count();
       if (elapsed < static_cast<long long>(config_.checkpoint_period)) {
         return;
       }
@@ -133,7 +134,7 @@ class CACManager {
   }
 
   void PrecommitWriteSet(const WriteSetType& write_set,
-                         EpochNumber current_epoch) {
+                         EpochNumber /*current_epoch*/) {
     const auto cp_epoch = checkpoint_epoch_.load();
     for (auto& snapshot : write_set) {
       auto* item = snapshot.index_cache;
@@ -141,7 +142,7 @@ class CACManager {
         item->CopyLiveVersionToStableVersion();
         item->stable_epoch.store(cp_epoch);
       }
-      RegisterDirty(snapshot.table_name, snapshot.key, item, current_epoch);
+      RegisterDirty(snapshot.table_name, snapshot.key, item);
     }
   }
 
@@ -224,10 +225,11 @@ class CACManager {
 
  private:
   void RegisterDirty(const std::string& table_name, const std::string& key,
-                     DataItem* item, EpochNumber current_epoch) {
+                     DataItem* item) {
     auto* ds = tls_.Get();
-    if (item->dirty_epoch.load() < current_epoch) {
-      item->dirty_epoch.store(current_epoch);
+    const auto cp_epoch = checkpoint_epoch_.load();
+    if (item->dirty_epoch.load() < cp_epoch) {
+      item->dirty_epoch.store(cp_epoch);
       {
         std::lock_guard<std::mutex> lock(ds->latch);
         ds->dirty_live.push_back({table_name, key, item});
@@ -407,8 +409,7 @@ class CACManager {
     }
     durable_epoch_.store(cp_epoch);
     {
-      std::ofstream f(dep_working_,
-                      std::ios_base::out | std::ios_base::binary);
+      std::ofstream f(dep_working_, std::ios_base::out | std::ios_base::binary);
       msgpack::pack(f, cp_epoch);
       f.flush();
     }
@@ -509,12 +510,14 @@ class CACManager {
   std::chrono::high_resolution_clock::time_point last_checkpoint_time_;
   std::atomic<bool> has_dirty_writes_;
 
-  static constexpr std::string_view kDeltaFilePrefix = "incremental_checkpoint_";
-  static constexpr std::string_view kBaseFilePrefix  = "checkpoint_base_";
+  static constexpr std::string_view kDeltaFilePrefix =
+      "incremental_checkpoint_";
+  static constexpr std::string_view kBaseFilePrefix = "checkpoint_base_";
   static constexpr size_t kCompactionThreshold = 5;
 
   // Reads a single-pack msgpack file (base checkpoint files).
-  static std::optional<Logger::LogRecords> ReadLogFile(const std::string& path) {
+  static std::optional<Logger::LogRecords> ReadLogFile(
+      const std::string& path) {
     std::ifstream f(path, std::ios::binary);
     if (!f.good()) return std::nullopt;
     std::string buf((std::istreambuf_iterator<char>(f)),

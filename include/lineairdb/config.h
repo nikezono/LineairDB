@@ -139,6 +139,16 @@ struct Config {
 
   /**
    * @brief
+   * If true, CPR durability strategy executes a final checkpoint during
+   * database destruction. If false, it simulates an unclean shutdown/crash on
+   * destruction (does not write a final checkpoint).
+   *
+   * Default: false
+   */
+  bool enable_graceful_shutdown_checkpoint = false;
+
+  /**
+   * @brief
    * It uses as the threshold (percentage) for rehashing of the hash index.
    * A large value (e.g., 99) will not easily rehash the index and thus reduce
    * memory consumption because leaving less room in the index. On the other

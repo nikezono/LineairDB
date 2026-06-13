@@ -137,7 +137,8 @@ class TwoPhaseLockingImpl final : public ConcurrencyControlBase {
       snapshot.data_item_copy.transaction_id.store(new_tid);
     }
 
-    tx_ref_.checkpoint_manager_ref_.OnPrecommit(tx_ref_.write_set_ref_, my_epoch);
+    tx_ref_.checkpoint_manager_ref_.OnPrecommit(tx_ref_.write_set_ref_,
+                                                my_epoch);
     return true;
   };
 
