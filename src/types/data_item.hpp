@@ -73,8 +73,6 @@ struct DataItem {
   DataItem& operator=(const DataItem& rhs) {
     transaction_id.store(rhs.transaction_id.load());
     initialized = rhs.initialized;
-    dirty_epoch.store(rhs.dirty_epoch.load());
-    stable_epoch.store(rhs.stable_epoch.load());
     if (initialized) {
       buffer.Reset(rhs.buffer);
     }
