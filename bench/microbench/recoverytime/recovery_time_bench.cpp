@@ -28,17 +28,19 @@
 #include <map>
 #include <set>
 #include <thread>
+#include <unordered_map>
 #include <variant>
 
 #include "util/logger.hpp"
 
 size_t benchmark(const size_t db_size, const size_t buffer_size,
-                 const size_t number_of_updates_per_data_item) {
+                 const size_t number_of_updates_per_data_item,
+                 const LineairDB::Config::ConcurrencyControl cc_protocol,
+                 const LineairDB::Config::DurabilityStrategy durability_strategy) {
   assert(0 < db_size);
   LineairDB::Config config;
-  config.concurrency_control_protocol =
-      LineairDB::Config::ConcurrencyControl::Silo;
-  config.durability = LineairDB::Config::DurabilityStrategy::WAL;
+  config.concurrency_control_protocol = cc_protocol;
+  config.durability = durability_strategy;
   config.enable_recovery = true;
 
   {  // Populate database
@@ -85,8 +87,8 @@ size_t benchmark(const size_t db_size, const size_t buffer_size,
 }
 
 int main(int argc, char** argv) {
-  cxxopts::Options options("lockbench",
-                           "Microbenchmark of various locking algortihms");
+  cxxopts::Options options("recoverytime_bench",
+                           "Microbenchmark of recovery time");
 
   options.add_options()          //
       ("h,help", "Print usage")  //
@@ -96,6 +98,10 @@ int main(int argc, char** argv) {
        cxxopts::value<size_t>()->default_value("1"))  //
       ("b,buffersize", "Buffer size (bytes) for each data item",
        cxxopts::value<size_t>()->default_value("8"))  //
+      ("s,strategy", "Durability strategy: none, wal, checkpoint, checkpoint_wal, cac",
+       cxxopts::value<std::string>()->default_value("wal"))  //
+      ("c,cc", "Concurrency control protocol: Silo, SiloNWR, 2PL",
+       cxxopts::value<std::string>()->default_value("Silo"))  //
       ("o,output", "Output JSON filename",
        cxxopts::value<std::string>()->default_value(
            "recoverytime_bench_result.json"))  //
@@ -111,10 +117,40 @@ int main(int argc, char** argv) {
   const size_t buffer_size = result["buffersize"].as<size_t>();
   const size_t updates = result["updates"].as<size_t>();
 
+  static const std::map<std::string, LineairDB::Config::ConcurrencyControl> Protocols = {
+      {"Silo", LineairDB::Config::ConcurrencyControl::Silo},
+      {"SiloNWR", LineairDB::Config::ConcurrencyControl::SiloNWR},
+      {"2PL", LineairDB::Config::ConcurrencyControl::TwoPhaseLocking},
+  };
+
+  static const std::unordered_map<std::string, LineairDB::Config::DurabilityStrategy> Durabilities = {
+      {"none",           LineairDB::Config::DurabilityStrategy::None},
+      {"wal",            LineairDB::Config::DurabilityStrategy::WAL},
+      {"checkpoint",     LineairDB::Config::DurabilityStrategy::Checkpoint},
+      {"checkpoint_wal", LineairDB::Config::DurabilityStrategy::CheckpointAndWAL},
+      {"cac",            LineairDB::Config::DurabilityStrategy::CAC},
+  };
+
+  auto protocol_str = result["cc"].as<std::string>();
+  auto protocol_it = Protocols.find(protocol_str);
+  if (protocol_it == Protocols.end()) {
+    std::cerr << "Unknown concurrency control protocol: " << protocol_str << std::endl;
+    exit(1);
+  }
+  auto cc_protocol = protocol_it->second;
+
+  auto durability_str = result["strategy"].as<std::string>();
+  auto durability_it = Durabilities.find(durability_str);
+  if (durability_it == Durabilities.end()) {
+    std::cerr << "Unknown durability strategy: " << durability_str << std::endl;
+    exit(1);
+  }
+  auto durability_strategy = durability_it->second;
+
   std::filesystem::remove_all("lineairdb_logs");
 
   /** run benchmark **/
-  uint64_t elapsed_ms = benchmark(db_size, buffer_size, updates);
+  uint64_t elapsed_ms = benchmark(db_size, buffer_size, updates, cc_protocol, durability_strategy);
 
   SPDLOG_INFO("RecoveryTimeBench: measurement has finisihed.");
   SPDLOG_INFO("elapsed time: {0} milliseconds", elapsed_ms);
