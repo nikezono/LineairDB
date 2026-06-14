@@ -98,6 +98,11 @@ class CACManager {
     std::vector<DirtyEntry> bufs[2];
     std::atomic<size_t> active_idx{0};
     std::vector<DirtyEntry>* dirty_stable{nullptr};
+
+    DirtySet() {
+      bufs[0].reserve(4096);
+      bufs[1].reserve(4096);
+    }
   };
 
  public:
@@ -109,7 +114,6 @@ class CACManager {
         checkpoint_epoch_(1),
         durable_epoch_(0),
         stop_(false),
-        last_checkpoint_time_(std::chrono::high_resolution_clock::now()),
         has_dirty_writes_(false),
         dep_file_(config.work_dir + "/incremental_durable_epoch.log"),
         dep_working_(config.work_dir +
@@ -539,7 +543,7 @@ class CACManager {
   std::atomic<bool> stop_;
   std::thread manager_thread_;
   std::thread compactor_thread_;
-  std::chrono::high_resolution_clock::time_point last_checkpoint_time_;
+
   std::atomic<bool> has_dirty_writes_;
 
   static constexpr std::string_view kDeltaFilePrefix =
