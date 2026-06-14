@@ -28,7 +28,6 @@
 #include <fstream>
 #include <msgpack.hpp>
 #include <mutex>
-#include <optional>
 #include <string_view>
 #include <thread>
 #include <unordered_map>
@@ -83,24 +82,21 @@ namespace Recovery {
 class CACManager {
   // Internal implementation types - not part of the public API.
   struct DirtyEntry {
-    std::string_view table_name;
+    std::string table_name;
     std::string key;
     DataItem* item;
   };
   struct TableKeyRef {
-    std::string_view table_name;
-    std::string_view key;
-
-    bool operator==(const TableKeyRef& other) const {
-      return table_name == other.table_name && key == other.key;
+    std::string_view table_name, key;
+    bool operator==(const TableKeyRef& o) const {
+      return table_name == o.table_name && key == o.key;
     }
-  };
-  struct TableKeyHash {
-    size_t operator()(const TableKeyRef& k) const {
-      size_t h1 = std::hash<std::string_view>{}(k.table_name);
-      size_t h2 = std::hash<std::string_view>{}(k.key);
-      return h1 ^ (h2 << 1);
-    }
+    struct Hash {
+      size_t operator()(const TableKeyRef& k) const {
+        return std::hash<std::string_view>{}(k.table_name) ^
+               (std::hash<std::string_view>{}(k.key) << 1);
+      }
+    };
   };
   struct DirtySet {
     std::vector<DirtyEntry> bufs[2];
@@ -114,9 +110,8 @@ class CACManager {
   };
 
  public:
-  CACManager(const Config& config, TableDictionary& dict, EpochFramework& epoch)
+  CACManager(const Config& config, EpochFramework& epoch)
       : config_(config),
-        dict_(dict),
         epoch_manager_ref_(epoch),
         dirty_stable_empty_(true),
         checkpoint_epoch_(1),
@@ -181,6 +176,7 @@ class CACManager {
   void PrecommitWriteSet(const WriteSetType& write_set,
                          EpochNumber /*current_epoch*/) {
     if (write_set.empty()) return;
+    has_dirty_writes_.store(true);
     const auto cp_epoch = checkpoint_epoch_.load();
     auto* ds = tls_.Get();
     const auto idx = ds->active_idx.load(std::memory_order_acquire);
@@ -192,43 +188,23 @@ class CACManager {
           item->checkpoint_buffer.Reset(item->buffer);
           item->stable_epoch.store(cp_epoch);
         }
-      } else if (item->stable_epoch.load() == cp_epoch) {
-        item->checkpoint_buffer.Reset(item->buffer);
-        has_dirty_writes_.store(true);
       }
       if (item->dirty_epoch.load() < cp_epoch) {
         item->dirty_epoch.store(cp_epoch);
-        std::string_view tn = "";
-        if (auto table_opt = dict_.GetTable(snapshot.table_name)) {
-          tn = (*table_opt)->GetTableName();
-        } else {
-          tn = snapshot.table_name;
-        }
-        live_vec->push_back({tn, snapshot.key, item});
-        has_dirty_writes_.store(true);
+        live_vec->push_back({snapshot.table_name, snapshot.key, item});
       }
     }
   }
 
-  void AbortWriteSet(const WriteSetType& write_set) {
-    for (auto& snapshot : write_set) {
-      auto* item = snapshot.index_cache;
-      item->checkpoint_buffer.Reset(nullptr, 0);
-      item->stable_epoch.store(0);
-    }
-  }
+  void AbortWriteSet(const WriteSetType& /*write_set*/) {}
 
   EpochNumber GetDurableEpoch() const { return durable_epoch_.load(); }
 
   EpochNumber RecoverDurableEpoch() {
-    std::ifstream file(dep_file_, std::ios::binary);
     EpochNumber epoch = 0;
-    if (file.good()) {
+    if (auto buf = LoadFileContent(dep_file_)) {
       try {
-        std::string buf((std::istreambuf_iterator<char>(file)),
-                        std::istreambuf_iterator<char>());
-        if (!buf.empty())
-          msgpack::unpack(buf.data(), buf.size()).get().convert(epoch);
+        msgpack::unpack(buf->data(), buf->size()).get().convert(epoch);
       } catch (...) {
       }
     }
@@ -240,44 +216,46 @@ class CACManager {
     WriteSetType recovery_set;
     if (!std::filesystem::exists(config_.work_dir)) return recovery_set;
 
-    std::unordered_map<std::string, size_t> index_map;
+    std::vector<std::vector<Logger::LogRecord>> all_delta_records;
+    std::unordered_map<TableKeyRef, size_t, TableKeyRef::Hash> index_map;
 
     auto [base_epoch, base_file_path] = FindLatestBase();
     if (base_epoch > 0) {
-      if (auto records = ReadLogFile(base_file_path)) {
-        for (auto& record : *records) {
-          for (auto& kvp : record.key_value_pairs) {
-            const std::byte* vp =
-                kvp.buffer.empty()
-                    ? nullptr
-                    : reinterpret_cast<const std::byte*>(kvp.buffer.data());
-            const std::string map_key = kvp.table_name + '\0' + kvp.key;
-            index_map[map_key] = recovery_set.size();
-            recovery_set.emplace_back(Snapshot(kvp.key, vp, kvp.buffer.size(),
-                                               nullptr, kvp.table_name,
-                                               kvp.tid));
-          }
+      for (auto& record : ReadLogFile(base_file_path)) {
+        for (auto& kvp : record.key_value_pairs) {
+          const std::byte* vp =
+              kvp.buffer.empty()
+                  ? nullptr
+                  : reinterpret_cast<const std::byte*>(kvp.buffer.data());
+          TableKeyRef ref{kvp.table_name, kvp.key};
+          index_map[ref] = recovery_set.size();
+          recovery_set.emplace_back(Snapshot(kvp.key, vp, kvp.buffer.size(),
+                                             nullptr, kvp.table_name, kvp.tid));
         }
       }
     }
 
-    for (const auto& [e, path] : FindDeltaFiles()) {
+    auto delta_files = FindDeltaFiles();
+    all_delta_records.reserve(delta_files.size());
+    for (const auto& [e, path] : delta_files) {
       if (e <= base_epoch) continue;
-      for (auto& log_record : ReadDeltaFile(path)) {
+      all_delta_records.push_back(ReadLogFile(path));
+      auto& records = all_delta_records.back();
+      for (auto& log_record : records) {
         for (auto& kvp : log_record.key_value_pairs) {
           const std::byte* vp =
               kvp.buffer.empty()
                   ? nullptr
                   : reinterpret_cast<const std::byte*>(kvp.buffer.data());
           const size_t vs = kvp.buffer.size();
-          const std::string map_key = kvp.table_name + '\0' + kvp.key;
-          auto it = index_map.find(map_key);
+          TableKeyRef ref{kvp.table_name, kvp.key};
+          auto it = index_map.find(ref);
           if (it != index_map.end()) {
             auto& existing = recovery_set[it->second];
             if (existing.data_item_copy.transaction_id.load() < kvp.tid)
               existing.data_item_copy.Reset(vp, vs, kvp.tid);
           } else {
-            index_map[map_key] = recovery_set.size();
+            index_map[ref] = recovery_set.size();
             recovery_set.emplace_back(
                 Snapshot(kvp.key, vp, vs, nullptr, kvp.table_name, kvp.tid));
           }
@@ -288,19 +266,6 @@ class CACManager {
   }
 
  private:
-  std::string DeltaFilePath(EpochNumber epoch) const {
-    return config_.work_dir + "/" + std::string(kDeltaFilePrefix) +
-           std::to_string(epoch) + ".log";
-  }
-  std::string BaseFilePath(EpochNumber epoch) const {
-    return config_.work_dir + "/" + std::string(kBaseFilePrefix) +
-           std::to_string(epoch) + ".log";
-  }
-  std::string BaseWorkingFilePath(EpochNumber epoch) const {
-    return config_.work_dir + "/" + std::string(kBaseFilePrefix) +
-           std::to_string(epoch) + ".log.working";
-  }
-
   std::vector<std::pair<EpochNumber, std::string>> FindDeltaFiles(
       EpochNumber max_epoch = std::numeric_limits<EpochNumber>::max()) const {
     namespace fs = std::filesystem;
@@ -308,8 +273,9 @@ class CACManager {
     if (!fs::exists(config_.work_dir)) return result;
     for (const auto& entry : fs::directory_iterator(config_.work_dir)) {
       const std::string name = entry.path().filename().string();
-      if (name.find(kDeltaFilePrefix) != 0) continue;
-      if (name.find(".log") == std::string::npos) continue;
+      if (name.rfind(kDeltaFilePrefix, 0) != 0 ||
+          name.find(".log") == std::string::npos)
+        continue;
       try {
         const size_t len = kDeltaFilePrefix.size();
         EpochNumber e = std::stoul(name.substr(len, name.find(".log") - len));
@@ -328,9 +294,10 @@ class CACManager {
     if (!fs::exists(config_.work_dir)) return {0, ""};
     for (const auto& entry : fs::directory_iterator(config_.work_dir)) {
       const std::string name = entry.path().filename().string();
-      if (name.find(kBaseFilePrefix) != 0) continue;
-      if (name.find(".log") == std::string::npos) continue;
-      if (name.find(".working") != std::string::npos) continue;
+      if (name.rfind(kBaseFilePrefix, 0) != 0 ||
+          name.find(".log") == std::string::npos ||
+          name.find(".working") != std::string::npos)
+        continue;
       try {
         const size_t len = kBaseFilePrefix.size();
         EpochNumber e = std::stoul(name.substr(len, name.find(".log") - len));
@@ -377,7 +344,9 @@ class CACManager {
     });
 
     if (!record.key_value_pairs.empty()) {
-      std::string filename = DeltaFilePath(cp_epoch);
+      std::string filename = config_.work_dir + "/" +
+                             std::string(kDeltaFilePrefix) +
+                             std::to_string(cp_epoch) + ".log";
       std::ofstream f(filename, std::ios_base::out | std::ios_base::binary);
       Logger::LogRecords records{std::move(record)};
       msgpack::pack(f, records);
@@ -430,11 +399,18 @@ class CACManager {
   }
 
   void WriteRemainingDirtyEntries() {
-    checkpoint_epoch_.store(epoch_manager_ref_.GetGlobalEpoch());
-    RotateDirtySets(checkpoint_epoch_.load());
-
-    EpochNumber cp_epoch = checkpoint_epoch_.load();
+    EpochNumber cp_epoch = epoch_manager_ref_.GetGlobalEpoch();
+    checkpoint_epoch_.store(cp_epoch);
+    ForceRotateBuffers();
     WriteDeltaCheckpoint(cp_epoch, true);
+  }
+
+  void ForceRotateBuffers() {
+    tls_.ForEach([&](DirtySet* ds) {
+      const auto idx = ds->active_idx.load(std::memory_order_relaxed);
+      ds->active_idx.store(1 - idx, std::memory_order_release);
+      ds->dirty_stable = ds->bufs[idx].empty() ? nullptr : &ds->bufs[idx];
+    });
   }
 
   void CompactorLoop() {
@@ -459,18 +435,14 @@ class CACManager {
     if (delta_files.empty()) return;
 
     std::unordered_map<TableKeyRef, const Logger::LogRecord::KeyValuePair*,
-                       TableKeyHash>
+                       TableKeyRef::Hash>
         merged;
 
-    std::optional<Logger::LogRecords> base_records;
     if (!old_base_file.empty()) {
-      base_records = ReadLogFile(old_base_file);
-      if (base_records) {
-        for (auto& record : *base_records) {
-          for (const auto& kvp : record.key_value_pairs) {
-            TableKeyRef ref{kvp.table_name, kvp.key};
-            merged[ref] = &kvp;
-          }
+      for (auto& record : ReadLogFile(old_base_file)) {
+        for (const auto& kvp : record.key_value_pairs) {
+          TableKeyRef ref{kvp.table_name, kvp.key};
+          merged[ref] = &kvp;
         }
       }
     }
@@ -478,28 +450,27 @@ class CACManager {
     std::vector<std::vector<Logger::LogRecord>> all_delta_records;
     all_delta_records.reserve(delta_files.size());
     for (const auto& [epoch, filename] : delta_files) {
-      all_delta_records.push_back(ReadDeltaFile(filename));
+      all_delta_records.push_back(ReadLogFile(filename));
       auto& records = all_delta_records.back();
       for (auto& log_record : records) {
         for (const auto& kvp : log_record.key_value_pairs) {
           TableKeyRef ref{kvp.table_name, kvp.key};
-          auto it = merged.find(ref);
-          if (it == merged.end()) {
-            merged[ref] = &kvp;
-          } else {
-            if (it->second->key.empty() ||
-                it->second->tid.epoch < kvp.tid.epoch ||
-                (it->second->tid.epoch == kvp.tid.epoch &&
-                 it->second->tid.tid < kvp.tid.tid)) {
-              it->second = &kvp;
-            }
-          }
+          auto [it, inserted] = merged.emplace(ref, &kvp);
+          if (!inserted && (it->second->key.empty() ||
+                            it->second->tid.epoch < kvp.tid.epoch ||
+                            (it->second->tid.epoch == kvp.tid.epoch &&
+                             it->second->tid.tid < kvp.tid.tid)))
+            it->second = &kvp;
         }
       }
     }
 
-    const std::string new_base_working = BaseWorkingFilePath(compact_up_to);
-    const std::string new_base = BaseFilePath(compact_up_to);
+    const std::string new_base_working =
+        config_.work_dir + "/" + std::string(kBaseFilePrefix) +
+        std::to_string(compact_up_to) + ".log.working";
+    const std::string new_base = config_.work_dir + "/" +
+                                 std::string(kBaseFilePrefix) +
+                                 std::to_string(compact_up_to) + ".log";
     {
       std::ofstream f(new_base_working,
                       std::ios_base::out | std::ios_base::binary);
@@ -534,7 +505,6 @@ class CACManager {
   }
 
   const Config& config_;
-  TableDictionary& dict_;
   EpochFramework& epoch_manager_ref_;
   ThreadKeyStorage<DirtySet> tls_;
   std::atomic<bool> dirty_stable_empty_;
@@ -557,38 +527,25 @@ class CACManager {
   static constexpr std::string_view kBaseFilePrefix = "checkpoint_base_";
   static constexpr size_t kCompactionThreshold = 5;
 
-  // Reads a single-pack msgpack file (base checkpoint files).
-  static std::optional<Logger::LogRecords> ReadLogFile(
-      const std::string& path) {
+  static std::optional<std::string> LoadFileContent(const std::string& path) {
     std::ifstream f(path, std::ios::binary);
     if (!f.good()) return std::nullopt;
     std::string buf((std::istreambuf_iterator<char>(f)),
                     std::istreambuf_iterator<char>());
-    if (buf.empty()) return std::nullopt;
-    try {
-      Logger::LogRecords records;
-      msgpack::unpack(buf.data(), buf.size()).get().convert(records);
-      return records;
-    } catch (...) {
-      return std::nullopt;
-    }
+    return buf.empty() ? std::nullopt : std::make_optional(std::move(buf));
   }
 
-  // Reads a streaming msgpack file (delta checkpoint files) and returns all
-  // LogRecord entries flattened into a single vector.
-  static std::vector<Logger::LogRecord> ReadDeltaFile(const std::string& path) {
+  // Reads a msgpack log file (single-pack and streaming format both supported)
+  static std::vector<Logger::LogRecord> ReadLogFile(const std::string& path) {
     std::vector<Logger::LogRecord> result;
-    std::ifstream f(path, std::ios::binary);
-    if (!f.good()) return result;
-    std::string buf((std::istreambuf_iterator<char>(f)),
-                    std::istreambuf_iterator<char>());
-    if (buf.empty()) return result;
-    size_t offset = 0;
-    while (offset < buf.size()) {
+    auto buf = LoadFileContent(path);
+    if (!buf) return result;
+    for (size_t offset = 0; offset < buf->size();) {
       try {
         Logger::LogRecords records;
-        auto oh = msgpack::unpack(buf.data(), buf.size(), offset);
-        oh.get().convert(records);
+        msgpack::unpack(buf->data(), buf->size(), offset)
+            .get()
+            .convert(records);
         for (auto& r : records) result.push_back(std::move(r));
       } catch (...) {
         break;

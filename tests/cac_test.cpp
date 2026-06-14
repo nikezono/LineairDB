@@ -420,3 +420,78 @@ TEST_F(CACTest, RecoveryIgnoresWorkingFiles) {
                                ASSERT_EQ(res.value(), val1);
                              }});
 }
+
+// Verify that multiple writes to the same key within the same epoch do not
+// corrupt the checkpoint value. After a crash/restart, we must recover the
+// latest value committed in the epoch (20), not an intermediate value (10) nor
+// the pre-epoch value.
+TEST_F(CACTest, IntraEpochMultipleWritesConsistency) {
+  std::atomic<bool> t1_done(false);
+  std::atomic<bool> t2_done(false);
+
+  db_->ExecuteTransaction(
+      [&](LineairDB::Transaction& tx) { tx.Write<int>("intra_key", 10); },
+      [&](LineairDB::TxStatus) { t1_done = true; });
+
+  db_->ExecuteTransaction(
+      [&](LineairDB::Transaction& tx) { tx.Write<int>("intra_key", 20); },
+      [&](LineairDB::TxStatus) { t2_done = true; });
+
+  while (!t1_done.load() || !t2_done.load()) std::this_thread::yield();
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  db_.reset();
+
+  db_ = std::make_unique<LineairDB::Database>(config_);
+  TestHelper::DoTransactions(db_.get(), {[&](LineairDB::Transaction& tx) {
+                               auto res = tx.Read<int>("intra_key");
+                               ASSERT_TRUE(res.has_value());
+                               ASSERT_EQ(res.value(), 20);
+                             }});
+}
+
+// Verify that a transaction abort within the same epoch does not clear the
+// checkpoint buffer created by a concurrently committed transaction.
+TEST_F(CACTest, IntraEpochAbortConsistency) {
+  std::atomic<bool> t1_done(false);
+  std::atomic<bool> t2_done(false);
+
+  db_->ExecuteTransaction(
+      [&](LineairDB::Transaction& tx) { tx.Write<int>("abort_key", 100); },
+      [&](LineairDB::TxStatus status) {
+        ASSERT_EQ(status, LineairDB::TxStatus::Committed);
+        t1_done = true;
+      });
+
+  db_->ExecuteTransaction(
+      [&](LineairDB::Transaction& tx) {
+        tx.Write<int>("abort_key", 200);
+        tx.Abort();
+      },
+      [&](LineairDB::TxStatus status) {
+        ASSERT_EQ(status, LineairDB::TxStatus::Aborted);
+        t2_done = true;
+      });
+
+  while (!t1_done.load() || !t2_done.load()) std::this_thread::yield();
+
+  db_->Fence();
+  std::atomic<bool> t3_done(false);
+  db_->ExecuteTransaction(
+      [&](LineairDB::Transaction& tx) { tx.Write<int>("abort_key", 300); },
+      [&](LineairDB::TxStatus status) {
+        ASSERT_EQ(status, LineairDB::TxStatus::Committed);
+        t3_done = true;
+      });
+  while (!t3_done.load()) std::this_thread::yield();
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  db_.reset();
+
+  db_ = std::make_unique<LineairDB::Database>(config_);
+  TestHelper::DoTransactions(db_.get(), {[&](LineairDB::Transaction& tx) {
+                               auto res = tx.Read<int>("abort_key");
+                               ASSERT_TRUE(res.has_value());
+                               ASSERT_EQ(res.value(), 300);
+                             }});
+}

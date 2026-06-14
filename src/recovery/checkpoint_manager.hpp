@@ -38,12 +38,11 @@ class CheckpointManager {
  public:
   CheckpointManager(const Config& config, TableDictionary& dict,
                     EpochFramework& epoch)
-      : config_(config),
-        checkpoint_file_(config.work_dir + "/checkpoint.log") {
+      : config_(config), checkpoint_file_(config.work_dir + "/checkpoint.log") {
     if (IsFullScanCheckpoint()) {
       cpr_ = std::make_unique<CPRManager>(config, dict, epoch);
     } else if (IsCAC()) {
-      cac_ = std::make_unique<CACManager>(config, dict, epoch);
+      cac_ = std::make_unique<CACManager>(config, epoch);
     }
   }
 
@@ -67,10 +66,6 @@ class CheckpointManager {
   EpochNumber GetCheckpointCompletedEpoch() {
     if (cpr_) return cpr_->GetCheckpointCompletedEpoch();
     return 0;
-  }
-
-  void RotateDirtySets(EpochNumber next_checkpoint_epoch) {
-    if (cac_) cac_->RotateDirtySets(next_checkpoint_epoch);
   }
 
   // --- Checkpoint hooks called by the concurrency control layer ---
