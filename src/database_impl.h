@@ -216,9 +216,6 @@ class Database::Impl {
   // NOTE: Called by a special thread managed by EpochFramework.
   std::function<void(EpochNumber)> EventsOnEpochIsUpdated() {
     return [&](EpochNumber old_epoch) {
-      if (checkpoint_manager_.IsCAC()) {
-        checkpoint_manager_.RotateDirtySets(old_epoch);
-      }
       if (checkpoint_manager_.IsWAL()) {
         EpochNumber durable_epoch = logger_.FlushDurableEpoch();
         thread_pool_.EnqueueForAllThreads(

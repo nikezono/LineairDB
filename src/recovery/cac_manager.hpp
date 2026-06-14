@@ -46,6 +46,47 @@
 namespace LineairDB {
 namespace Recovery {
 
+/**
+ * @brief Threading and Concurrent Access Design in CACManager
+ *
+ * This manager coordinates incremental checkpointing (Continuous Adaptive
+ * Checkpointing - CAC). The core data structure is the thread-local `DirtySet`
+ * (`tls_`), containing:
+ *   - `dirty_live`: A buffer for active writes by transaction threads.
+ *   - `dirty_stable`: A staging buffer for writes that are ready to be
+ * persisted.
+ *   - `latch`: A std::mutex protecting the local `DirtySet` from concurrent
+ * operations.
+ *
+ * --- Thread Roles & Access Patterns ---
+ *
+ * 1. Transaction Threads (Multiple threads):
+ *    - Function: PrecommitWriteSet
+ *    - Behavior: When a transaction commits, it appends updated data items to
+ * its own thread-local `dirty_live` list.
+ *    - Locks: Acquires `ds->latch` to safely modify `ds->dirty_live`.
+ *    - Note: Since `tls_.Get()` resolves to a thread-local instance, different
+ * transaction threads do not compete with each other for the same
+ * `DirtySet->latch`.
+ *
+ * 2. Epoch Progress (EpochManager / System thread):
+ *    - Function: RotateDirtySets
+ *    - Behavior: Invoked on global epoch changes. Iterates over all active
+ * thread-local `DirtySet`s (via `tls_.ForEach`). Moves all entries from
+ * `dirty_live` to `dirty_stable` and clears `dirty_live`.
+ *    - Locks: Acquires `ds->latch` for each thread's `DirtySet` to safely
+ * transfer data.
+ *    - Contention: Competes with the corresponding transaction thread accessing
+ * `ds->dirty_live` at that moment.
+ *
+ * 3. Logging Worker Thread (Background thread):
+ *    - Function: IncrementalWorkerLoop / WriteRemainingDirtyEntries
+ *    - Behavior: Iterates over all thread-local `DirtySet`s, moving entries
+ * from `dirty_stable` to a local buffer for persistence.
+ *    - Locks: Acquires `ds->latch` to safely drain `ds->dirty_stable`.
+ *    - Contention: Competes with the Epoch thread (`RotateDirtySets`) when it
+ * attempts to push entries from `dirty_live` to `dirty_stable`.
+ */
 class CACManager {
   // Internal implementation types - not part of the public API.
   struct DirtyEntry {
@@ -54,9 +95,9 @@ class CACManager {
     DataItem* item;
   };
   struct DirtySet {
-    std::vector<DirtyEntry> dirty_live;
-    std::vector<DirtyEntry> dirty_stable;
-    std::mutex latch;
+    std::vector<DirtyEntry> bufs[2];
+    std::atomic<size_t> active_idx{0};
+    std::vector<DirtyEntry>* dirty_stable{nullptr};
   };
 
  public:
@@ -94,40 +135,29 @@ class CACManager {
     if (compactor_thread_.joinable()) compactor_thread_.join();
   }
 
-  void RotateDirtySets(EpochNumber next_checkpoint_epoch, bool force = false) {
+  void RotateDirtySets(EpochNumber next_checkpoint_epoch) {
     if (!has_dirty_writes_.load()) {
       durable_epoch_.store(next_checkpoint_epoch);
       return;
-    }
-
-    if (!force) {
-      auto now = std::chrono::high_resolution_clock::now();
-      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                         now - last_checkpoint_time_)
-                         .count();
-      if (elapsed < static_cast<long long>(config_.checkpoint_period)) {
-        return;
-      }
-      last_checkpoint_time_ = now;
     }
     has_dirty_writes_.store(false);
 
     checkpoint_epoch_.store(next_checkpoint_epoch);
     bool has_dirty = false;
     tls_.ForEach([&](DirtySet* ds) {
-      std::lock_guard<std::mutex> lock(ds->latch);
-      if (!ds->dirty_live.empty()) {
-        ds->dirty_stable.insert(ds->dirty_stable.end(),
-                                std::make_move_iterator(ds->dirty_live.begin()),
-                                std::make_move_iterator(ds->dirty_live.end()));
-        ds->dirty_live.clear();
+      const auto current_idx = ds->active_idx.load(std::memory_order_relaxed);
+      const auto next_idx = 1 - current_idx;
+      ds->active_idx.store(next_idx, std::memory_order_release);
+      if (!ds->bufs[current_idx].empty()) {
+        ds->dirty_stable = &ds->bufs[current_idx];
         has_dirty = true;
+      } else {
+        ds->dirty_stable = nullptr;
       }
     });
     if (has_dirty) {
+      epoch_manager_ref_.Sync();
       dirty_stable_empty_.store(false);
-      std::lock_guard<std::mutex> lock(worker_latch_);
-      worker_cv_.notify_all();
     } else {
       durable_epoch_.store(next_checkpoint_epoch);
     }
@@ -135,14 +165,22 @@ class CACManager {
 
   void PrecommitWriteSet(const WriteSetType& write_set,
                          EpochNumber /*current_epoch*/) {
+    if (write_set.empty()) return;
     const auto cp_epoch = checkpoint_epoch_.load();
+    auto* ds = tls_.Get();
+    const auto idx = ds->active_idx.load(std::memory_order_acquire);
+    auto* live_vec = &ds->bufs[idx];
     for (auto& snapshot : write_set) {
       auto* item = snapshot.index_cache;
       if (item->stable_epoch.load() < cp_epoch) {
         item->CopyLiveVersionToStableVersion();
         item->stable_epoch.store(cp_epoch);
       }
-      RegisterDirty(snapshot.table_name, snapshot.key, item);
+      if (item->dirty_epoch.load() < cp_epoch) {
+        item->dirty_epoch.store(cp_epoch);
+        live_vec->push_back({snapshot.table_name, snapshot.key, item});
+        has_dirty_writes_.store(true);
+      }
     }
   }
 
@@ -224,20 +262,6 @@ class CACManager {
   }
 
  private:
-  void RegisterDirty(const std::string& table_name, const std::string& key,
-                     DataItem* item) {
-    auto* ds = tls_.Get();
-    const auto cp_epoch = checkpoint_epoch_.load();
-    if (item->dirty_epoch.load() < cp_epoch) {
-      item->dirty_epoch.store(cp_epoch);
-      {
-        std::lock_guard<std::mutex> lock(ds->latch);
-        ds->dirty_live.push_back({table_name, key, item});
-      }
-      has_dirty_writes_.store(true);
-    }
-  }
-
   std::string DeltaFilePath(EpochNumber epoch) const {
     return config_.work_dir + "/" + std::string(kDeltaFilePrefix) +
            std::to_string(epoch) + ".log";
@@ -296,41 +320,50 @@ class CACManager {
 
   void IncrementalWorkerLoop() {
     while (!stop_.load()) {
-      std::unique_lock<std::mutex> lock(worker_latch_);
-      worker_cv_.wait(
-          lock, [&] { return stop_.load() || !dirty_stable_empty_.load(); });
+      {
+        std::unique_lock<std::mutex> lock(worker_latch_);
+        worker_cv_.wait_for(
+            lock, std::chrono::milliseconds(config_.checkpoint_period),
+            [&] { return stop_.load(); });
+      }
       if (stop_.load()) break;
+
+      EpochNumber next_cp_epoch = epoch_manager_ref_.GetGlobalEpoch();
+      RotateDirtySets(next_cp_epoch);
+
+      if (dirty_stable_empty_.load()) {
+        continue;
+      }
 
       EpochNumber cp_epoch = checkpoint_epoch_.load();
       Logger::LogRecord record;
       record.epoch = cp_epoch;
 
       tls_.ForEach([&](DirtySet* ds) {
-        std::vector<DirtyEntry> local_dirty;
-        {
-          std::lock_guard<std::mutex> ds_lock(ds->latch);
-          local_dirty = std::move(ds->dirty_stable);
-          ds->dirty_stable.clear();
-        }
-        for (auto& entry : local_dirty) {
-          entry.item->ExclusiveLock();
-          if (!entry.item->IsInitialized()) {
+        auto* stable_vec = ds->dirty_stable;
+        ds->dirty_stable = nullptr;
+        if (stable_vec) {
+          for (auto& entry : *stable_vec) {
+            entry.item->ExclusiveLock();
+            if (!entry.item->IsInitialized()) {
+              entry.item->ExclusiveUnlock();
+              continue;
+            }
+            Logger::LogRecord::KeyValuePair kvp;
+            kvp.table_name = entry.table_name;
+            kvp.key = entry.key;
+            if (entry.item->stable_epoch.load() == cp_epoch &&
+                !entry.item->checkpoint_buffer.IsEmpty()) {
+              kvp.buffer = entry.item->checkpoint_buffer.toString();
+              entry.item->checkpoint_buffer.Reset(nullptr, 0);
+            } else {
+              kvp.buffer = entry.item->buffer.toString();
+            }
+            kvp.tid = {cp_epoch, 0};
+            record.key_value_pairs.emplace_back(std::move(kvp));
             entry.item->ExclusiveUnlock();
-            continue;
           }
-          Logger::LogRecord::KeyValuePair kvp;
-          kvp.table_name = entry.table_name;
-          kvp.key = entry.key;
-          if (entry.item->stable_epoch.load() == cp_epoch &&
-              !entry.item->checkpoint_buffer.IsEmpty()) {
-            kvp.buffer = entry.item->checkpoint_buffer.toString();
-            entry.item->checkpoint_buffer.Reset(nullptr, 0);
-          } else {
-            kvp.buffer = entry.item->buffer.toString();
-          }
-          kvp.tid = {cp_epoch, 0};
-          record.key_value_pairs.emplace_back(std::move(kvp));
-          entry.item->ExclusiveUnlock();
+          stable_vec->clear();
         }
       });
       dirty_stable_empty_.store(true);
@@ -365,38 +398,37 @@ class CACManager {
 
   void WriteRemainingDirtyEntries() {
     checkpoint_epoch_.store(epoch_manager_ref_.GetGlobalEpoch());
-    RotateDirtySets(checkpoint_epoch_.load(), true);
+    RotateDirtySets(checkpoint_epoch_.load());
 
     EpochNumber cp_epoch = checkpoint_epoch_.load();
     Logger::LogRecord record;
     record.epoch = cp_epoch;
 
     tls_.ForEach([&](DirtySet* ds) {
-      std::vector<DirtyEntry> local_dirty;
-      {
-        std::lock_guard<std::mutex> ds_lock(ds->latch);
-        local_dirty = std::move(ds->dirty_stable);
-        ds->dirty_stable.clear();
-      }
-      for (auto& entry : local_dirty) {
-        entry.item->ExclusiveLock();
-        if (!entry.item->IsInitialized()) {
+      auto* stable_vec = ds->dirty_stable;
+      ds->dirty_stable = nullptr;
+      if (stable_vec) {
+        for (auto& entry : *stable_vec) {
+          entry.item->ExclusiveLock();
+          if (!entry.item->IsInitialized()) {
+            entry.item->ExclusiveUnlock();
+            continue;
+          }
+          Logger::LogRecord::KeyValuePair kvp;
+          kvp.table_name = entry.table_name;
+          kvp.key = entry.key;
+          if (entry.item->stable_epoch.load() == cp_epoch &&
+              !entry.item->checkpoint_buffer.IsEmpty()) {
+            kvp.buffer = entry.item->checkpoint_buffer.toString();
+            entry.item->checkpoint_buffer.Reset(nullptr, 0);
+          } else {
+            kvp.buffer = entry.item->buffer.toString();
+          }
+          kvp.tid = {cp_epoch, 0};
+          record.key_value_pairs.emplace_back(std::move(kvp));
           entry.item->ExclusiveUnlock();
-          continue;
         }
-        Logger::LogRecord::KeyValuePair kvp;
-        kvp.table_name = entry.table_name;
-        kvp.key = entry.key;
-        if (entry.item->stable_epoch.load() == cp_epoch &&
-            !entry.item->checkpoint_buffer.IsEmpty()) {
-          kvp.buffer = entry.item->checkpoint_buffer.toString();
-          entry.item->checkpoint_buffer.Reset(nullptr, 0);
-        } else {
-          kvp.buffer = entry.item->buffer.toString();
-        }
-        kvp.tid = {cp_epoch, 0};
-        record.key_value_pairs.emplace_back(std::move(kvp));
-        entry.item->ExclusiveUnlock();
+        stable_vec->clear();
       }
     });
 
