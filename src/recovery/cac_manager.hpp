@@ -140,6 +140,9 @@ class CACManager {
   }
 
   void RotateDirtySets(EpochNumber next_checkpoint_epoch) {
+    if (next_checkpoint_epoch <= checkpoint_epoch_.load()) {
+      return;
+    }
     if (!has_dirty_writes_.load()) {
       durable_epoch_.store(next_checkpoint_epoch);
       return;
@@ -177,8 +180,13 @@ class CACManager {
     for (auto& snapshot : write_set) {
       auto* item = snapshot.index_cache;
       if (item->stable_epoch.load() < cp_epoch) {
-        item->CopyLiveVersionToStableVersion();
-        item->stable_epoch.store(cp_epoch);
+        if (item->checkpoint_buffer.IsEmpty()) {
+          item->checkpoint_buffer.Reset(item->buffer);
+          item->stable_epoch.store(cp_epoch);
+        }
+      } else if (item->stable_epoch.load() == cp_epoch) {
+        item->checkpoint_buffer.Reset(item->buffer);
+        has_dirty_writes_.store(true);
       }
       if (item->dirty_epoch.load() < cp_epoch) {
         item->dirty_epoch.store(cp_epoch);

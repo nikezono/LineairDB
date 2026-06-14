@@ -1,9 +1,12 @@
 
 /**
  * CAC (Commit-ahead Checkpointing) test cases.
- * CAC is a durability strategy that achieves full consistency guarantee with bounded log file size, by using epoch-rotation-based incremental checkpointing and delaying commit ACK until the epoch of the transaction is durable.
- * i.e., CAC provides the same semantics with the conventional WAL + Checkpointing.
- * This test suite verifies the properties of CAC as described above.
+ * CAC is a durability strategy that achieves full consistency guarantee with
+ * bounded log file size, by using epoch-rotation-based incremental
+ * checkpointing and delaying commit ACK until the epoch of the transaction is
+ * durable. i.e., CAC provides the same semantics with the conventional WAL +
+ * Checkpointing. This test suite verifies the properties of CAC as described
+ * above.
  */
 
 #include <lineairdb/config.h>
@@ -27,7 +30,7 @@ class CACTest : public ::testing::Test {
   LineairDB::Config config_;
   std::unique_ptr<LineairDB::Database> db_;
   virtual void SetUp() {
-    std::filesystem::remove_all("lineairdb_logs");
+    std::filesystem::remove_all(config_.work_dir);
     config_.max_thread = 4;
     config_.durability = LineairDB::Config::DurabilityStrategy::CAC;
     config_.enable_recovery = true;
@@ -57,14 +60,12 @@ TEST_F(CACTest, Recovery) {
 // Overwrite the same key in a later epoch; recovery must return the latest
 // value, not the first write.
 TEST_F(CACTest, OverwriteSameKeyRecovery) {
-  TestHelper::DoTransactions(db_.get(), {[&](LineairDB::Transaction& tx) {
-                               tx.Write<int>("k", 1);
-                             }});
+  TestHelper::DoTransactions(
+      db_.get(), {[&](LineairDB::Transaction& tx) { tx.Write<int>("k", 1); }});
   db_->Fence();
 
-  TestHelper::DoTransactions(db_.get(), {[&](LineairDB::Transaction& tx) {
-                               tx.Write<int>("k", 2);
-                             }});
+  TestHelper::DoTransactions(
+      db_.get(), {[&](LineairDB::Transaction& tx) { tx.Write<int>("k", 2); }});
   db_->Fence();
 
   db_.reset();
@@ -88,12 +89,12 @@ TEST_F(CACTest, MultipleKeysRecovery) {
 
   db_ = std::make_unique<LineairDB::Database>(config_);
   for (int i = 0; i < N; ++i) {
-    TestHelper::DoTransactions(
-        db_.get(), {[&, i](LineairDB::Transaction& tx) {
-          auto res = tx.Read<int>("mk_" + std::to_string(i));
-          ASSERT_TRUE(res.has_value());
-          ASSERT_EQ(res.value(), i);
-        }});
+    TestHelper::DoTransactions(db_.get(), {[&, i](LineairDB::Transaction& tx) {
+                                 auto res =
+                                     tx.Read<int>("mk_" + std::to_string(i));
+                                 ASSERT_TRUE(res.has_value());
+                                 ASSERT_EQ(res.value(), i);
+                               }});
   }
 }
 
@@ -145,16 +146,17 @@ TEST_F(CACTest, ConcurrentWriteRecovery) {
   db_ = std::make_unique<LineairDB::Database>(config_);
   // All committed writes must be visible after recovery.
   for (int i = 0; i < N; ++i) {
-    TestHelper::DoTransactions(
-        db_.get(), {[&, i](LineairDB::Transaction& tx) {
-          auto res = tx.Read<int>("cw_" + std::to_string(i));
-          // Either the write committed (value present) or it was aborted (no
-          // value); both are valid outcomes.  We only check the type-safety and
-          // absence of corruption.
-          if (res.has_value()) {
-            ASSERT_EQ(res.value(), i * 10);
-          }
-        }});
+    TestHelper::DoTransactions(db_.get(), {[&, i](LineairDB::Transaction& tx) {
+                                 auto res =
+                                     tx.Read<int>("cw_" + std::to_string(i));
+                                 // Either the write committed (value present)
+                                 // or it was aborted (no value); both are valid
+                                 // outcomes.  We only check the type-safety and
+                                 // absence of corruption.
+                                 if (res.has_value()) {
+                                   ASSERT_EQ(res.value(), i * 10);
+                                 }
+                               }});
   }
 }
 
@@ -204,9 +206,10 @@ class CACCompactionTest : public ::testing::Test {
  protected:
   LineairDB::Config config_;
   std::unique_ptr<LineairDB::Database> db_;
-  const std::string log_dir_ = "./lineairdb_logs";
+  std::string log_dir_;
 
   void SetUp() override {
+    log_dir_ = config_.work_dir;
     std::filesystem::remove_all(log_dir_);
     config_.max_thread = 2;
     config_.durability = LineairDB::Config::DurabilityStrategy::CAC;
@@ -244,15 +247,18 @@ TEST_F(CACCompactionTest, FileCountDecreasesAfterCompaction) {
   // After all epochs, at least one snapshot reduction must have occurred:
   // a compactor would merge older epoch files, so the count at some point
   // must be strictly less than the maximum observed count.
-  const size_t max_count = *std::max_element(file_counts.begin(), file_counts.end());
+  const size_t max_count =
+      *std::max_element(file_counts.begin(), file_counts.end());
   const size_t last_count = file_counts.back();
   EXPECT_LT(last_count, max_count)
       << "File count never decreased: compaction has not been implemented. "
-      << "Counts observed: [" << [&]{
-           std::string s;
-           for (auto c : file_counts) s += std::to_string(c) + " ";
-           return s;
-         }() << "]";
+      << "Counts observed: [" <<
+      [&] {
+        std::string s;
+        for (auto c : file_counts) s += std::to_string(c) + " ";
+        return s;
+      }()
+      << "]";
 }
 
 // Same scenario but measured by total byte size.
@@ -310,7 +316,8 @@ TEST_F(CACCompactionTest, CompactionPreservesRecoverability) {
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
   db_.reset();
 
-  // Verify compaction happened (at least the file count did not grow unbounded).
+  // Verify compaction happened (at least the file count did not grow
+  // unbounded).
   const size_t post_compact_count = GetIncrementalFileStats(log_dir_).count;
   EXPECT_LT(post_compact_count, static_cast<size_t>(kEpochs))
       << "Expected compaction to have reduced file count below " << kEpochs;
@@ -331,21 +338,20 @@ TEST_F(CACCompactionTest, CompactionPreservesRecoverability) {
     while (!done.load()) std::this_thread::yield();
   }
   db_->Fence();
-}
-
-// Verify that recovery handles empty delta checkpoint files gracefully.
+}  // Verify that recovery handles empty delta checkpoint files gracefully.
 TEST_F(CACTest, EmptyDeltaFileRecovery) {
   int initial_value = 12345;
   TestHelper::DoTransactions(db_.get(), {[&](LineairDB::Transaction& tx) {
                                tx.Write<int>("valid_key", initial_value);
-                              }});
+                             }});
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
   db_.reset();
 
   // Create an empty delta log file with a high epoch number
-  std::filesystem::create_directory("lineairdb_logs");
+  std::filesystem::create_directory(config_.work_dir);
   {
-    std::ofstream f("lineairdb_logs/incremental_checkpoint_9999.log", std::ios::binary);
+    std::ofstream f(config_.work_dir + "/incremental_checkpoint_9999.log",
+                    std::ios::binary);
   }
 
   // Restart DB and verify recovery succeeds and returns the correct value
@@ -357,23 +363,26 @@ TEST_F(CACTest, EmptyDeltaFileRecovery) {
                              }});
 }
 
-// Verify that recovery handles corrupted delta checkpoint files (non-msgpack garbage) without crashing.
+// Verify that recovery handles corrupted delta checkpoint files (non-msgpack
+// garbage) without crashing.
 TEST_F(CACTest, CorruptedMsgpackRecovery) {
   int initial_value = 67890;
   TestHelper::DoTransactions(db_.get(), {[&](LineairDB::Transaction& tx) {
                                tx.Write<int>("valid_key2", initial_value);
-                              }});
+                             }});
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
   db_.reset();
 
   // Create a corrupted delta log file with garbage bytes
-  std::filesystem::create_directory("lineairdb_logs");
+  std::filesystem::create_directory(config_.work_dir);
   {
-    std::ofstream f("lineairdb_logs/incremental_checkpoint_9999.log", std::ios::binary);
+    std::ofstream f(config_.work_dir + "/incremental_checkpoint_9999.log",
+                    std::ios::binary);
     f << "This is corrupted non-msgpack garbage data!!";
   }
 
-  // Restart DB and verify recovery ignores the corrupted file and succeeds for the valid key
+  // Restart DB and verify recovery ignores the corrupted file and succeeds for
+  // the valid key
   db_ = std::make_unique<LineairDB::Database>(config_);
   TestHelper::DoTransactions(db_.get(), {[&](LineairDB::Transaction& tx) {
                                auto res = tx.Read<int>("valid_key2");
@@ -382,7 +391,8 @@ TEST_F(CACTest, CorruptedMsgpackRecovery) {
                              }});
 }
 
-// Verify that recovery ignores ".working" temporary files left by the compactor.
+// Verify that recovery ignores ".working" temporary files left by the
+// compactor.
 TEST_F(CACTest, RecoveryIgnoresWorkingFiles) {
   // 1. Write some initial data
   int val1 = 111;
@@ -392,14 +402,17 @@ TEST_F(CACTest, RecoveryIgnoresWorkingFiles) {
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
   db_.reset();
 
-  // 2. Write a fake newer base file but with `.working` suffix, containing a different value (or garbage)
-  std::filesystem::create_directory("lineairdb_logs");
+  // 2. Write a fake newer base file but with `.working` suffix, containing a
+  // different value (or garbage)
+  std::filesystem::create_directory(config_.work_dir);
   {
-    std::ofstream f("lineairdb_logs/checkpoint_base_9999.log.working", std::ios::binary);
+    std::ofstream f(config_.work_dir + "/checkpoint_base_9999.log.working",
+                    std::ios::binary);
     f << "garbage in working file";
   }
 
-  // 3. Restart DB; the recovery should ignore the `.working` file and read from the original checkpoints
+  // 3. Restart DB; the recovery should ignore the `.working` file and read from
+  // the original checkpoints
   db_ = std::make_unique<LineairDB::Database>(config_);
   TestHelper::DoTransactions(db_.get(), {[&](LineairDB::Transaction& tx) {
                                auto res = tx.Read<int>("key1");
