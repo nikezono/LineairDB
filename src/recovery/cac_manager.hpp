@@ -90,7 +90,7 @@ namespace Recovery {
 class CACManager {
   // Internal implementation types - not part of the public API.
   struct DirtyEntry {
-    std::string table_name;
+    std::string_view table_name;
     std::string key;
     DataItem* item;
   };
@@ -106,9 +106,9 @@ class CACManager {
   };
 
  public:
-  CACManager(const Config& config, TableDictionary& /*dict*/,
-             EpochFramework& epoch)
+  CACManager(const Config& config, TableDictionary& dict, EpochFramework& epoch)
       : config_(config),
+        dict_(dict),
         epoch_manager_ref_(epoch),
         dirty_stable_empty_(true),
         checkpoint_epoch_(1),
@@ -190,7 +190,13 @@ class CACManager {
       }
       if (item->dirty_epoch.load() < cp_epoch) {
         item->dirty_epoch.store(cp_epoch);
-        live_vec->push_back({snapshot.table_name, snapshot.key, item});
+        std::string_view tn = "";
+        if (auto table_opt = dict_.GetTable(snapshot.table_name)) {
+          tn = (*table_opt)->GetTableName();
+        } else {
+          tn = snapshot.table_name;
+        }
+        live_vec->push_back({tn, snapshot.key, item});
         has_dirty_writes_.store(true);
       }
     }
@@ -509,15 +515,20 @@ class CACManager {
     const std::string new_base_working = BaseWorkingFilePath(compact_up_to);
     const std::string new_base = BaseFilePath(compact_up_to);
     {
-      Logger::LogRecord new_record;
-      new_record.epoch = compact_up_to;
-      for (auto& [k, kvp] : merged) {
-        new_record.key_value_pairs.push_back(std::move(kvp));
-      }
       std::ofstream f(new_base_working,
                       std::ios_base::out | std::ios_base::binary);
-      Logger::LogRecords records{std::move(new_record)};
-      msgpack::pack(f, records);
+      msgpack::packer<std::ofstream> pk(&f);
+      pk.pack_array(1);
+      pk.pack_array(2);
+      pk.pack(compact_up_to);
+      pk.pack_array(merged.size());
+      for (auto& [k, kvp] : merged) {
+        pk.pack_array(4);
+        pk.pack(kvp.key);
+        pk.pack(kvp.buffer);
+        pk.pack(kvp.tid);
+        pk.pack(kvp.table_name);
+      }
       f.flush();
     }
     if (rename(new_base_working.c_str(), new_base.c_str()) != 0) {
@@ -537,6 +548,7 @@ class CACManager {
   }
 
   const Config& config_;
+  TableDictionary& dict_;
   EpochFramework& epoch_manager_ref_;
   ThreadKeyStorage<DirtySet> tls_;
   std::atomic<bool> dirty_stable_empty_;
