@@ -55,8 +55,6 @@ namespace Recovery {
  *   - `dirty_live`: A buffer for active writes by transaction threads.
  *   - `dirty_stable`: A staging buffer for writes that are ready to be
  * persisted.
- *   - `latch`: A std::mutex protecting the local `DirtySet` from concurrent
- * operations.
  *
  * --- Thread Roles & Access Patterns ---
  *
@@ -64,28 +62,23 @@ namespace Recovery {
  *    - Function: PrecommitWriteSet
  *    - Behavior: When a transaction commits, it appends updated data items to
  * its own thread-local `dirty_live` list.
- *    - Locks: Acquires `ds->latch` to safely modify `ds->dirty_live`.
- *    - Note: Since `tls_.Get()` resolves to a thread-local instance, different
- * transaction threads do not compete with each other for the same
- * `DirtySet->latch`.
+ *    - Locks: Lock-free. Since `tls_.Get()` resolves to a thread-local
+ * instance, different transaction threads do not compete with each other.
  *
  * 2. Epoch Progress (EpochManager / System thread):
  *    - Function: RotateDirtySets
  *    - Behavior: Invoked on global epoch changes. Iterates over all active
  * thread-local `DirtySet`s (via `tls_.ForEach`). Moves all entries from
  * `dirty_live` to `dirty_stable` and clears `dirty_live`.
- *    - Locks: Acquires `ds->latch` for each thread's `DirtySet` to safely
- * transfer data.
- *    - Contention: Competes with the corresponding transaction thread accessing
- * `ds->dirty_live` at that moment.
+ *    - Locks: Lock-free index flipping. Uses atomic active_idx swap followed
+ * by epoch_manager.Sync() to safely rotate buffers.
  *
  * 3. Logging Worker Thread (Background thread):
  *    - Function: IncrementalWorkerLoop / WriteRemainingDirtyEntries
  *    - Behavior: Iterates over all thread-local `DirtySet`s, moving entries
  * from `dirty_stable` to a local buffer for persistence.
- *    - Locks: Acquires `ds->latch` to safely drain `ds->dirty_stable`.
- *    - Contention: Competes with the Epoch thread (`RotateDirtySets`) when it
- * attempts to push entries from `dirty_live` to `dirty_stable`.
+ *    - Locks: Lock-free. Safely drains `ds->dirty_stable` after Sync()
+ * guarantees that no transaction thread is active on the stable buffer.
  */
 class CACManager {
   // Internal implementation types - not part of the public API.
@@ -351,89 +344,7 @@ class CACManager {
     return {best_epoch, best_path};
   }
 
-  void IncrementalWorkerLoop() {
-    while (!stop_.load()) {
-      {
-        std::unique_lock<std::mutex> lock(worker_latch_);
-        worker_cv_.wait_for(
-            lock, std::chrono::milliseconds(config_.checkpoint_period),
-            [&] { return stop_.load(); });
-      }
-      if (stop_.load()) break;
-
-      EpochNumber next_cp_epoch = epoch_manager_ref_.GetGlobalEpoch();
-      RotateDirtySets(next_cp_epoch);
-
-      if (dirty_stable_empty_.load()) {
-        continue;
-      }
-
-      EpochNumber cp_epoch = checkpoint_epoch_.load();
-      Logger::LogRecord record;
-      record.epoch = cp_epoch;
-
-      tls_.ForEach([&](DirtySet* ds) {
-        auto* stable_vec = ds->dirty_stable;
-        ds->dirty_stable = nullptr;
-        if (stable_vec) {
-          for (auto& entry : *stable_vec) {
-            entry.item->ExclusiveLock();
-            if (!entry.item->IsInitialized()) {
-              entry.item->ExclusiveUnlock();
-              continue;
-            }
-            Logger::LogRecord::KeyValuePair kvp;
-            kvp.table_name = entry.table_name;
-            kvp.key = entry.key;
-            if (entry.item->stable_epoch.load() == cp_epoch &&
-                !entry.item->checkpoint_buffer.IsEmpty()) {
-              kvp.buffer = entry.item->checkpoint_buffer.toString();
-              entry.item->checkpoint_buffer.Reset(nullptr, 0);
-            } else {
-              kvp.buffer = entry.item->buffer.toString();
-            }
-            kvp.tid = {cp_epoch, 0};
-            record.key_value_pairs.emplace_back(std::move(kvp));
-            entry.item->ExclusiveUnlock();
-          }
-          stable_vec->clear();
-        }
-      });
-      dirty_stable_empty_.store(true);
-
-      if (!record.key_value_pairs.empty()) {
-        std::string filename = DeltaFilePath(cp_epoch);
-        std::ofstream f(filename, std::ios_base::out | std::ios_base::binary);
-        Logger::LogRecords records{std::move(record)};
-        msgpack::pack(f, records);
-        f.flush();
-        if (++incremental_file_count_ >= kCompactionThreshold) {
-          std::lock_guard<std::mutex> compactor_lock(compactor_latch_);
-          compaction_requested_.store(true);
-          compactor_cv_.notify_one();
-        }
-      }
-
-      durable_epoch_.store(cp_epoch);
-      {
-        std::ofstream f(dep_working_,
-                        std::ios_base::out | std::ios_base::binary);
-        msgpack::pack(f, cp_epoch);
-        f.flush();
-      }
-      if (rename(dep_working_.c_str(), dep_file_.c_str()) != 0) {
-        SPDLOG_ERROR("durable epoch rename failed, errno: {}", errno);
-        exit(1);
-      }
-    }
-    WriteRemainingDirtyEntries();
-  }
-
-  void WriteRemainingDirtyEntries() {
-    checkpoint_epoch_.store(epoch_manager_ref_.GetGlobalEpoch());
-    RotateDirtySets(checkpoint_epoch_.load());
-
-    EpochNumber cp_epoch = checkpoint_epoch_.load();
+  void WriteDeltaCheckpoint(EpochNumber cp_epoch, bool is_shutdown = false) {
     Logger::LogRecord record;
     record.epoch = cp_epoch;
 
@@ -471,7 +382,15 @@ class CACManager {
       Logger::LogRecords records{std::move(record)};
       msgpack::pack(f, records);
       f.flush();
+      if (!is_shutdown) {
+        if (++incremental_file_count_ >= kCompactionThreshold) {
+          std::lock_guard<std::mutex> compactor_lock(compactor_latch_);
+          compaction_requested_.store(true);
+          compactor_cv_.notify_one();
+        }
+      }
     }
+
     durable_epoch_.store(cp_epoch);
     {
       std::ofstream f(dep_working_, std::ios_base::out | std::ios_base::binary);
@@ -479,8 +398,43 @@ class CACManager {
       f.flush();
     }
     if (rename(dep_working_.c_str(), dep_file_.c_str()) != 0) {
-      // ignore or log failure on shutdown
+      SPDLOG_ERROR("durable epoch rename failed, errno: {}", errno);
+      if (!is_shutdown) {
+        exit(1);
+      }
     }
+  }
+
+  void IncrementalWorkerLoop() {
+    while (!stop_.load()) {
+      {
+        std::unique_lock<std::mutex> lock(worker_latch_);
+        worker_cv_.wait_for(
+            lock, std::chrono::milliseconds(config_.checkpoint_period),
+            [&] { return stop_.load(); });
+      }
+      if (stop_.load()) break;
+
+      EpochNumber next_cp_epoch = epoch_manager_ref_.GetGlobalEpoch();
+      RotateDirtySets(next_cp_epoch);
+
+      if (dirty_stable_empty_.load()) {
+        continue;
+      }
+
+      EpochNumber cp_epoch = checkpoint_epoch_.load();
+      WriteDeltaCheckpoint(cp_epoch, false);
+      dirty_stable_empty_.store(true);
+    }
+    WriteRemainingDirtyEntries();
+  }
+
+  void WriteRemainingDirtyEntries() {
+    checkpoint_epoch_.store(epoch_manager_ref_.GetGlobalEpoch());
+    RotateDirtySets(checkpoint_epoch_.load());
+
+    EpochNumber cp_epoch = checkpoint_epoch_.load();
+    WriteDeltaCheckpoint(cp_epoch, true);
   }
 
   void CompactorLoop() {
