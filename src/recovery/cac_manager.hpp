@@ -94,6 +94,21 @@ class CACManager {
     std::string key;
     DataItem* item;
   };
+  struct TableKeyRef {
+    std::string_view table_name;
+    std::string_view key;
+
+    bool operator==(const TableKeyRef& other) const {
+      return table_name == other.table_name && key == other.key;
+    }
+  };
+  struct TableKeyHash {
+    size_t operator()(const TableKeyRef& k) const {
+      size_t h1 = std::hash<std::string_view>{}(k.table_name);
+      size_t h2 = std::hash<std::string_view>{}(k.key);
+      return h1 ^ (h2 << 1);
+    }
+  };
   struct DirtySet {
     std::vector<DirtyEntry> bufs[2];
     std::atomic<size_t> active_idx{0};
@@ -489,24 +504,41 @@ class CACManager {
     auto delta_files = FindDeltaFiles(compact_up_to);
     if (delta_files.empty()) return;
 
-    std::unordered_map<std::string, Logger::LogRecord::KeyValuePair> merged;
+    std::unordered_map<TableKeyRef, const Logger::LogRecord::KeyValuePair*,
+                       TableKeyHash>
+        merged;
 
+    std::optional<Logger::LogRecords> base_records;
     if (!old_base_file.empty()) {
-      if (auto records = ReadLogFile(old_base_file)) {
-        for (auto& record : *records) {
-          for (auto& kvp : record.key_value_pairs) {
-            merged[kvp.table_name + '\0' + kvp.key] = std::move(kvp);
+      base_records = ReadLogFile(old_base_file);
+      if (base_records) {
+        for (auto& record : *base_records) {
+          for (const auto& kvp : record.key_value_pairs) {
+            TableKeyRef ref{kvp.table_name, kvp.key};
+            merged[ref] = &kvp;
           }
         }
       }
     }
 
+    std::vector<std::vector<Logger::LogRecord>> all_delta_records;
+    all_delta_records.reserve(delta_files.size());
     for (const auto& [epoch, filename] : delta_files) {
-      for (auto& log_record : ReadDeltaFile(filename)) {
-        for (auto& kvp : log_record.key_value_pairs) {
-          auto& slot = merged[kvp.table_name + '\0' + kvp.key];
-          if (slot.key.empty() || slot.tid < kvp.tid) {
-            slot = std::move(kvp);
+      all_delta_records.push_back(ReadDeltaFile(filename));
+      auto& records = all_delta_records.back();
+      for (auto& log_record : records) {
+        for (const auto& kvp : log_record.key_value_pairs) {
+          TableKeyRef ref{kvp.table_name, kvp.key};
+          auto it = merged.find(ref);
+          if (it == merged.end()) {
+            merged[ref] = &kvp;
+          } else {
+            if (it->second->key.empty() ||
+                it->second->tid.epoch < kvp.tid.epoch ||
+                (it->second->tid.epoch == kvp.tid.epoch &&
+                 it->second->tid.tid < kvp.tid.tid)) {
+              it->second = &kvp;
+            }
           }
         }
       }
@@ -522,12 +554,12 @@ class CACManager {
       pk.pack_array(2);
       pk.pack(compact_up_to);
       pk.pack_array(merged.size());
-      for (auto& [k, kvp] : merged) {
+      for (auto& [k, kvp_ptr] : merged) {
         pk.pack_array(4);
-        pk.pack(kvp.key);
-        pk.pack(kvp.buffer);
-        pk.pack(kvp.tid);
-        pk.pack(kvp.table_name);
+        pk.pack(kvp_ptr->key);
+        pk.pack(kvp_ptr->buffer);
+        pk.pack(kvp_ptr->tid);
+        pk.pack(kvp_ptr->table_name);
       }
       f.flush();
     }
