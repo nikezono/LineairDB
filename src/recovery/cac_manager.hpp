@@ -46,38 +46,12 @@ namespace LineairDB {
 namespace Recovery {
 
 /**
- * @brief Threading and Concurrent Access Design in CACManager
+ * @brief CACManager: Continuous Adaptive Checkpointing
  *
- * This manager coordinates incremental checkpointing (Continuous Adaptive
- * Checkpointing - CAC). The core data structure is the thread-local `DirtySet`
- * (`tls_`), containing:
- *   - `dirty_live`: A buffer for active writes by transaction threads.
- *   - `dirty_stable`: A staging buffer for writes that are ready to be
- * persisted.
- *
- * --- Thread Roles & Access Patterns ---
- *
- * 1. Transaction Threads (Multiple threads):
- *    - Function: PrecommitWriteSet
- *    - Behavior: When a transaction commits, it appends updated data items to
- * its own thread-local `dirty_live` list.
- *    - Locks: Lock-free. Since `tls_.Get()` resolves to a thread-local
- * instance, different transaction threads do not compete with each other.
- *
- * 2. Epoch Progress (EpochManager / System thread):
- *    - Function: RotateDirtySets
- *    - Behavior: Invoked on global epoch changes. Iterates over all active
- * thread-local `DirtySet`s (via `tls_.ForEach`). Moves all entries from
- * `dirty_live` to `dirty_stable` and clears `dirty_live`.
- *    - Locks: Lock-free index flipping. Uses atomic active_idx swap followed
- * by epoch_manager.Sync() to safely rotate buffers.
- *
- * 3. Logging Worker Thread (Background thread):
- *    - Function: IncrementalWorkerLoop / WriteRemainingDirtyEntries
- *    - Behavior: Iterates over all thread-local `DirtySet`s, moving entries
- * from `dirty_stable` to a local buffer for persistence.
- *    - Locks: Lock-free. Safely drains `ds->dirty_stable` after Sync()
- * guarantees that no transaction thread is active on the stable buffer.
+ * Thread roles:
+ *  - Transaction threads: call PrecommitWriteSet (lock-free, thread-local).
+ *  - Epoch thread:        calls RotateDirtySets (lock-free double-buffer swap).
+ *  - Worker thread:       drains dirty_stable and persists delta log files.
  */
 class CACManager {
   // Internal implementation types - not part of the public API.
@@ -130,14 +104,7 @@ class CACManager {
 
   void Stop() {
     if (stop_.exchange(true)) return;
-    {
-      std::lock_guard<std::mutex> lock(worker_latch_);
-      worker_cv_.notify_all();
-    }
-    {
-      std::lock_guard<std::mutex> lock(compactor_latch_);
-      compactor_cv_.notify_all();
-    }
+    for (auto* cv : {&worker_cv_, &compactor_cv_}) cv->notify_all();
     if (manager_thread_.joinable()) manager_thread_.join();
     if (compactor_thread_.joinable()) compactor_thread_.join();
   }
@@ -219,9 +186,29 @@ class CACManager {
     std::vector<std::vector<Logger::LogRecord>> all_delta_records;
     std::unordered_map<TableKeyRef, size_t, TableKeyRef::Hash> index_map;
 
+    // Helper: convert a KVP to a Snapshot and register it in recovery_set.
+    auto add_or_update = [&](const Logger::LogRecord::KeyValuePair& kvp) {
+      const std::byte* vp =
+          kvp.buffer.empty()
+              ? nullptr
+              : reinterpret_cast<const std::byte*>(kvp.buffer.data());
+      const size_t vs = kvp.buffer.size();
+      TableKeyRef ref{kvp.table_name, kvp.key};
+      auto it = index_map.find(ref);
+      if (it == index_map.end()) {
+        index_map[ref] = recovery_set.size();
+        recovery_set.emplace_back(
+            Snapshot(kvp.key, vp, vs, nullptr, kvp.table_name, kvp.tid));
+      } else {
+        auto& existing = recovery_set[it->second];
+        if (existing.data_item_copy.transaction_id.load() < kvp.tid)
+          existing.data_item_copy.Reset(vp, vs, kvp.tid);
+      }
+    };
+
     auto [base_epoch, base_file_path] = FindLatestBase();
     if (base_epoch > 0) {
-      for (auto& record : ReadLogFile(base_file_path)) {
+      for (auto& record : ReadLogFile(base_file_path))
         for (auto& kvp : record.key_value_pairs) {
           const std::byte* vp =
               kvp.buffer.empty()
@@ -232,7 +219,6 @@ class CACManager {
           recovery_set.emplace_back(Snapshot(kvp.key, vp, kvp.buffer.size(),
                                              nullptr, kvp.table_name, kvp.tid));
         }
-      }
     }
 
     auto delta_files = FindDeltaFiles();
@@ -240,45 +226,29 @@ class CACManager {
     for (const auto& [e, path] : delta_files) {
       if (e <= base_epoch) continue;
       all_delta_records.push_back(ReadLogFile(path));
-      auto& records = all_delta_records.back();
-      for (auto& log_record : records) {
-        for (auto& kvp : log_record.key_value_pairs) {
-          const std::byte* vp =
-              kvp.buffer.empty()
-                  ? nullptr
-                  : reinterpret_cast<const std::byte*>(kvp.buffer.data());
-          const size_t vs = kvp.buffer.size();
-          TableKeyRef ref{kvp.table_name, kvp.key};
-          auto it = index_map.find(ref);
-          if (it != index_map.end()) {
-            auto& existing = recovery_set[it->second];
-            if (existing.data_item_copy.transaction_id.load() < kvp.tid)
-              existing.data_item_copy.Reset(vp, vs, kvp.tid);
-          } else {
-            index_map[ref] = recovery_set.size();
-            recovery_set.emplace_back(
-                Snapshot(kvp.key, vp, vs, nullptr, kvp.table_name, kvp.tid));
-          }
-        }
-      }
+      for (auto& log_record : all_delta_records.back())
+        for (auto& kvp : log_record.key_value_pairs) add_or_update(kvp);
     }
     return recovery_set;
   }
 
  private:
-  std::vector<std::pair<EpochNumber, std::string>> FindDeltaFiles(
+  // Returns sorted (epoch, path) pairs for log files matching the given prefix.
+  std::vector<std::pair<EpochNumber, std::string>> FindLogFiles(
+      std::string_view prefix,
       EpochNumber max_epoch = std::numeric_limits<EpochNumber>::max()) const {
     namespace fs = std::filesystem;
     std::vector<std::pair<EpochNumber, std::string>> result;
     if (!fs::exists(config_.work_dir)) return result;
     for (const auto& entry : fs::directory_iterator(config_.work_dir)) {
       const std::string name = entry.path().filename().string();
-      if (name.rfind(kDeltaFilePrefix, 0) != 0 ||
-          name.find(".log") == std::string::npos)
+      if (name.rfind(prefix, 0) != 0 ||
+          name.find(".log") == std::string::npos ||
+          name.find(".working") != std::string::npos)
         continue;
       try {
-        const size_t len = kDeltaFilePrefix.size();
-        EpochNumber e = std::stoul(name.substr(len, name.find(".log") - len));
+        EpochNumber e = std::stoul(
+            name.substr(prefix.size(), name.find(".log") - prefix.size()));
         if (e <= max_epoch) result.emplace_back(e, entry.path().string());
       } catch (...) {
       }
@@ -287,28 +257,15 @@ class CACManager {
     return result;
   }
 
+  std::vector<std::pair<EpochNumber, std::string>> FindDeltaFiles(
+      EpochNumber max_epoch = std::numeric_limits<EpochNumber>::max()) const {
+    return FindLogFiles(kDeltaFilePrefix, max_epoch);
+  }
+
   std::pair<EpochNumber, std::string> FindLatestBase() const {
-    namespace fs = std::filesystem;
-    EpochNumber best_epoch = 0;
-    std::string best_path;
-    if (!fs::exists(config_.work_dir)) return {0, ""};
-    for (const auto& entry : fs::directory_iterator(config_.work_dir)) {
-      const std::string name = entry.path().filename().string();
-      if (name.rfind(kBaseFilePrefix, 0) != 0 ||
-          name.find(".log") == std::string::npos ||
-          name.find(".working") != std::string::npos)
-        continue;
-      try {
-        const size_t len = kBaseFilePrefix.size();
-        EpochNumber e = std::stoul(name.substr(len, name.find(".log") - len));
-        if (e > best_epoch) {
-          best_epoch = e;
-          best_path = entry.path().string();
-        }
-      } catch (...) {
-      }
-    }
-    return {best_epoch, best_path};
+    auto files = FindLogFiles(kBaseFilePrefix);
+    return files.empty() ? std::make_pair(EpochNumber{0}, std::string{})
+                         : files.back();
   }
 
   void WriteDeltaCheckpoint(EpochNumber cp_epoch, bool is_shutdown = false) {
@@ -351,15 +308,17 @@ class CACManager {
       Logger::LogRecords records{std::move(record)};
       msgpack::pack(f, records);
       f.flush();
-      if (!is_shutdown) {
-        if (++incremental_file_count_ >= kCompactionThreshold) {
-          std::lock_guard<std::mutex> compactor_lock(compactor_latch_);
-          compaction_requested_.store(true);
-          compactor_cv_.notify_one();
-        }
+      if (!is_shutdown && ++incremental_file_count_ >= kCompactionThreshold) {
+        std::lock_guard<std::mutex> compactor_lock(compactor_latch_);
+        compaction_requested_.store(true);
+        compactor_cv_.notify_one();
       }
     }
 
+    FlushDurableEpoch(cp_epoch, is_shutdown);
+  }
+
+  void FlushDurableEpoch(EpochNumber cp_epoch, bool is_shutdown) {
     durable_epoch_.store(cp_epoch);
     {
       std::ofstream f(dep_working_, std::ios_base::out | std::ios_base::binary);
@@ -368,9 +327,7 @@ class CACManager {
     }
     if (rename(dep_working_.c_str(), dep_file_.c_str()) != 0) {
       SPDLOG_ERROR("durable epoch rename failed, errno: {}", errno);
-      if (!is_shutdown) {
-        exit(1);
-      }
+      if (!is_shutdown) exit(1);
     }
   }
 
@@ -438,21 +395,22 @@ class CACManager {
                        TableKeyRef::Hash>
         merged;
 
+    // All records (base + delta) must stay alive as long as merged holds
+    // pointers into them. Store everything in all_records.
+    std::vector<std::vector<Logger::LogRecord>> all_records;
+    all_records.reserve(delta_files.size() + 1);
+
     if (!old_base_file.empty()) {
-      for (auto& record : ReadLogFile(old_base_file)) {
+      all_records.push_back(ReadLogFile(old_base_file));
+      for (auto& record : all_records.back())
         for (const auto& kvp : record.key_value_pairs) {
-          TableKeyRef ref{kvp.table_name, kvp.key};
-          merged[ref] = &kvp;
+          merged[TableKeyRef{kvp.table_name, kvp.key}] = &kvp;
         }
-      }
     }
 
-    std::vector<std::vector<Logger::LogRecord>> all_delta_records;
-    all_delta_records.reserve(delta_files.size());
     for (const auto& [epoch, filename] : delta_files) {
-      all_delta_records.push_back(ReadLogFile(filename));
-      auto& records = all_delta_records.back();
-      for (auto& log_record : records) {
+      all_records.push_back(ReadLogFile(filename));
+      for (auto& log_record : all_records.back()) {
         for (const auto& kvp : log_record.key_value_pairs) {
           TableKeyRef ref{kvp.table_name, kvp.key};
           auto [it, inserted] = merged.emplace(ref, &kvp);
