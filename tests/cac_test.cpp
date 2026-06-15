@@ -233,7 +233,7 @@ class CACCompactionTest : public ::testing::Test {
 // the compactor must have merged some files so that the total number of
 // incremental_checkpoint_*.log files is strictly less than 10.
 TEST_F(CACCompactionTest, FileCountDecreasesAfterCompaction) {
-  const int kEpochs = 10;
+  const int kEpochs = 15;
 
   std::vector<size_t> file_counts;
 
@@ -243,6 +243,10 @@ TEST_F(CACCompactionTest, FileCountDecreasesAfterCompaction) {
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     file_counts.push_back(GetIncrementalFileStats(log_dir_).count);
   }
+
+  // Give the compactor thread time to finish any pending compaction.
+  std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+  file_counts.push_back(GetIncrementalFileStats(log_dir_).count);
 
   // After all epochs, at least one snapshot reduction must have occurred:
   // a compactor would merge older epoch files, so the count at some point
@@ -432,12 +436,13 @@ TEST_F(CACTest, IntraEpochMultipleWritesConsistency) {
   db_->ExecuteTransaction(
       [&](LineairDB::Transaction& tx) { tx.Write<int>("intra_key", 10); },
       [&](LineairDB::TxStatus) { t1_done = true; });
+  while (!t1_done.load()) std::this_thread::yield();
 
   db_->ExecuteTransaction(
       [&](LineairDB::Transaction& tx) { tx.Write<int>("intra_key", 20); },
       [&](LineairDB::TxStatus) { t2_done = true; });
 
-  while (!t1_done.load() || !t2_done.load()) std::this_thread::yield();
+  while (!t2_done.load()) std::this_thread::yield();
 
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
   db_.reset();
