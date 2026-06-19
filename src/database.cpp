@@ -39,10 +39,9 @@ const Config Database::GetConfig() const noexcept {
   return db_pimpl_->GetConfig();
 }
 
-void Database::ExecuteTransaction(
-    std::function<void(Transaction&)> transaction_procedure,
-    std::function<void(TxStatus)> callback,
-    std::optional<CallbackType> precommit_clbk) {
+void Database::ExecuteTransaction(ProcedureType transaction_procedure,
+                                  CallbackType callback,
+                                  std::optional<CallbackType> precommit_clbk) {
   db_pimpl_->ExecuteTransaction(transaction_procedure, callback,
                                 precommit_clbk);
 }
@@ -51,9 +50,9 @@ Transaction& Database::BeginTransaction() {
   return db_pimpl_->BeginTransaction();
 }
 
-bool Database::EndTransaction(Transaction& tx, CallbackType clbk) {
-  return db_pimpl_->EndTransaction(std::forward<decltype(tx)>(tx),
-                                   std::forward<decltype(clbk)>(clbk));
+bool Database::EndTransaction(Transaction& tx, CallbackType commit_clbk,
+                              std::optional<CallbackType> precommit_clbk) {
+  return db_pimpl_->EndTransaction(tx, commit_clbk, precommit_clbk);
 }
 
 void Database::Fence() const noexcept { db_pimpl_->Fence(); }

@@ -88,6 +88,16 @@ int main(int argc, char** argv) {
        cxxopts::value<bool>()->default_value("false"))  //
       ("o,output", "Output JSON filename",
        cxxopts::value<std::string>()->default_value("ycsb_result.json"))  //
+      ("enable_tes", "Enable Transaction Epoch Shifting (TES)",
+       cxxopts::value<bool>()->default_value("false"))  //
+      ("tes_latency_bound", "TES: latency bound (K)",
+       cxxopts::value<size_t>()->default_value("5"))  //
+      ("tes_warmup_count", "TES: warmup write count (W)",
+       cxxopts::value<size_t>()->default_value("64"))  //
+      ("tes_max_read_set_size", "TES: max read set size for shiftable tx",
+       cxxopts::value<size_t>()->default_value("8"))  //
+      ("tes_bloom_filter_words", "TES: Bloom filter size (64-bit words)",
+       cxxopts::value<size_t>()->default_value("4"))  //
       ;
 
   auto result = options.parse(argc, argv);
@@ -106,8 +116,14 @@ int main(int argc, char** argv) {
   config.enable_logging = result["log"].as<bool>();
   config.max_thread = result["thread"].as<size_t>();
   config.epoch_duration_ms = result["epoch"].as<size_t>();
+  config.enable_checkpointing = result["checkpoint"].as<bool>();
   config.checkpoint_period = result["checkpoint_interval"].as<size_t>();
   config.rehash_threshold = result["rehash_threshold"].as<double>();
+  config.tes.enable = result["enable_tes"].as<bool>();
+  config.tes.latency_bound = result["tes_latency_bound"].as<size_t>();
+  config.tes.warmup_count = result["tes_warmup_count"].as<size_t>();
+  config.tes.max_read_set_size = result["tes_max_read_set_size"].as<size_t>();
+  config.tes.bloom_filter_words = result["tes_bloom_filter_words"].as<size_t>();
 
   const auto use_handler = result["handler"].as<bool>();
 

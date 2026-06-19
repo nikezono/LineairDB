@@ -173,6 +173,38 @@ struct Config {
    * Default: "__anonymous_table"
    */
   std::string anonymous_table_name = "__anonymous_table";
+
+  struct TES {
+    /**
+     * @brief Enables Transaction Epoch Shifting (TES) scheduling optimization.
+     * Default: false
+     */
+    bool enable = false;
+
+    /**
+     * @brief The maximum number of epochs a transaction can be shifted/delayed.
+     * Default: 5
+     */
+    size_t latency_bound = 5;
+
+    /**
+     * @brief The number of writes (warmup count) before the TES scheduling
+     * policy becomes active. Default: 64
+     */
+    size_t warmup_count = 64;
+
+    /**
+     * @brief The maximum read set size for a transaction to be considered
+     * shiftable. Default: 8
+     */
+    size_t max_read_set_size = 8;
+
+    /**
+     * @brief The size of the Bloom filter used for the Dirty Summary in 64-bit
+     * words. Default: 4
+     */
+    size_t bloom_filter_words = 4;
+  } tes;
 };
 }  // namespace LineairDB
 

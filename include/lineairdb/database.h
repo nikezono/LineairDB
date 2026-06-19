@@ -114,7 +114,9 @@ class Database {
    * abort the given `tx`. In contrast with the true case, this result will not
    * be overturned.
    */
-  bool EndTransaction(Transaction& tx, CallbackType clbk);
+  bool EndTransaction(
+      Transaction& tx, CallbackType commit_clbk,
+      std::optional<CallbackType> precommit_clbk = std::nullopt);
 
   /**
    * @brief

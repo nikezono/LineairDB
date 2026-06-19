@@ -22,6 +22,8 @@
 #include <lineairdb/tx_status.h>
 
 #include <functional>
+#include <optional>
+#include <stdexcept>
 #include <utility>
 
 #include "callback/callback_manager.h"
@@ -34,6 +36,7 @@
 #include "util/backoff.hpp"
 #include "util/epoch_framework.hpp"
 #include "util/logger.hpp"
+#include "util/tes_manager.hpp"
 
 namespace LineairDB {
 class Database::Impl {
@@ -48,7 +51,8 @@ class Database::Impl {
         callback_manager_(config_),
         epoch_framework_(c.epoch_duration_ms, EventsOnEpochIsUpdated()),
         checkpoint_manager_(config_, table_dictionary_, epoch_framework_),
-        thread_pool_(c.max_thread) {
+        thread_pool_(c.max_thread),
+        tes_manager_(config_) {
     if (Database::Impl::CurrentDBInstance == nullptr) {
       Database::Impl::CurrentDBInstance = this;
       SPDLOG_INFO("LineairDB instance has been constructed.");
@@ -90,88 +94,62 @@ class Database::Impl {
     Database::Impl::CurrentDBInstance = nullptr;
   }
 
+  Transaction& BeginTransaction() {
+    epoch_framework_.MakeMeOnline();
+    ProcessDeferredTransactions(epoch_framework_.GetMyThreadLocalEpoch(), true);
+    return *(new Transaction(this));
+  }
+
+  bool EndTransaction(Transaction& tx, CallbackType commit_clbk,
+                      std::optional<CallbackType> precommit_clbk) {
+    // (A) TES enabled + no precommit callback -> abort tx and throw
+    // std::runtime_error
+    if (config_.tes.enable && !precommit_clbk.has_value()) {
+      delete &tx;
+      epoch_framework_.MakeMeOffline();
+      throw std::runtime_error(
+          "LineairDB: enable_tes=true requires the 3-argument EndTransaction "
+          "with precommit_clbk.");
+    }
+
+    bool committed = TerminateTransaction(tx, std::move(commit_clbk),
+                                          std::move(precommit_clbk), true);
+    epoch_framework_.MakeMeOffline();
+    if (config_.enable_checkpointing)
+      logger_.TruncateLogs(checkpoint_manager_.GetCheckpointCompletedEpoch());
+    return committed;
+  }
+
   void ExecuteTransaction(ProcedureType proc, CallbackType clbk,
                           std::optional<CallbackType> prclbk) {
+    // TES enabled + no precommit callback -> throw
+    if (config_.tes.enable && !prclbk.has_value()) {
+      throw std::runtime_error(
+          "LineairDB: enable_tes=true requires precommit_clbk in "
+          "ExecuteTransaction.");
+    }
+
     for (;;) {
       bool success = thread_pool_.Enqueue([&, transaction_procedure = proc,
                                            callback = clbk,
-                                           precommit_clbk = prclbk]() {
+                                           precommit_clbk = prclbk]() mutable {
         epoch_framework_.MakeMeOnline();
-        Transaction tx(this);
 
+        ProcessDeferredTransactions(epoch_framework_.GetMyThreadLocalEpoch(),
+                                    false);
+
+        // Allocate Transaction on the heap to keep it alive outside the scope
+        // during TES deferral.
+        Transaction* tx_ptr = new Transaction(this);
+        Transaction& tx = *tx_ptr;
         transaction_procedure(tx);
-        if (tx.IsAborted()) {
-          if (precommit_clbk)
-            precommit_clbk.value()(LineairDB::TxStatus::Aborted);
-          callback(LineairDB::TxStatus::Aborted);
-          epoch_framework_.MakeMeOffline();
-          return;
-        }
 
-        bool committed = tx.Precommit();
-        if (committed) {
-          tx.tx_pimpl_->PostProcessing(TxStatus::Committed);
-
-          if (precommit_clbk.has_value()) {
-            precommit_clbk.value()(TxStatus::Committed);
-          }
-          const auto current_epoch = epoch_framework_.GetMyThreadLocalEpoch();
-          callback_manager_.Enqueue(std::move(callback), current_epoch);
-          if (config_.enable_logging) {
-            logger_.Enqueue(tx.tx_pimpl_->write_set_, current_epoch);
-          }
-        } else {
-          tx.tx_pimpl_->PostProcessing(TxStatus::Aborted);
-          if (precommit_clbk.has_value()) {
-            precommit_clbk.value()(TxStatus::Aborted);
-          }
-          callback(LineairDB::TxStatus::Aborted);
-        }
-
+        TerminateTransaction(tx, std::move(callback), std::move(precommit_clbk),
+                             false);
         epoch_framework_.MakeMeOffline();
       });
       if (success) break;
     }
-  }
-
-  Transaction& BeginTransaction() {
-    epoch_framework_.MakeMeOnline();
-    return *(new Transaction(this));
-  }
-
-  bool EndTransaction(Transaction& tx, CallbackType clbk) {
-    if (tx.IsAborted()) {
-      clbk(TxStatus::Aborted);
-      delete &tx;
-      epoch_framework_.MakeMeOffline();
-      return false;
-    }
-
-    bool committed = tx.Precommit();
-    if (committed) {
-      tx.tx_pimpl_->PostProcessing(TxStatus::Committed);
-
-      tx.tx_pimpl_->current_status_ = TxStatus::Committed;
-      const auto current_epoch = epoch_framework_.GetMyThreadLocalEpoch();
-      callback_manager_.Enqueue(std::move(clbk), current_epoch, true);
-
-      if (config_.enable_logging) {
-        logger_.Enqueue(tx.tx_pimpl_->write_set_, current_epoch, true);
-      }
-
-    } else {
-      tx.tx_pimpl_->PostProcessing(TxStatus::Aborted);
-      clbk(TxStatus::Aborted);
-    }
-    epoch_framework_.MakeMeOffline();
-
-    if (config_.enable_checkpointing) {
-      auto checkpoint_completed =
-          checkpoint_manager_.GetCheckpointCompletedEpoch();
-      logger_.TruncateLogs(checkpoint_completed);
-    }
-    delete &tx;
-    return committed;
   }
 
   void RequestCallbacks() {
@@ -200,8 +178,17 @@ class Database::Impl {
    */
   void Fence() {
     const auto current_epoch = epoch_framework_.GetGlobalEpoch();
+
     epoch_framework_.Sync();
     thread_pool_.WaitForQueuesToBecomeEmpty();
+
+    if (config_.tes.enable) {
+      // Drain suspended_sets of all worker threads after guaranteeing that all
+      // workers are idle.
+      epoch_framework_.MakeMeOnline();
+      DrainTransactions(tes_manager_.PopAllDeferredTransactions(), true);
+      epoch_framework_.MakeMeOffline();
+    }
 
     const bool skip_checkpoint_wait = destructing_.load() &&
                                       !config_.enable_logging &&
@@ -214,10 +201,10 @@ class Database::Impl {
       }
     }
     // Wait for all index updates to be linearizable
-    // This ensures that all insertions/deletions are visible in the index
     table_dictionary_.ForEachTable(
         [](Table& table) { table.WaitForIndexIsLinearizable(); });
   }
+
   const Config& GetConfig() const { return config_; }
 
   // NOTE: Called by a special thread managed by EpochFramework.
@@ -251,9 +238,17 @@ class Database::Impl {
       if (config_.enable_checkpointing) {
         auto checkpoint_completed =
             checkpoint_manager_.GetCheckpointCompletedEpoch();
-
         thread_pool_.EnqueueForAllThreads([&, checkpoint_completed]() {
           logger_.TruncateLogs(checkpoint_completed);
+        });
+      }
+
+      // TES: Update drain policy and reset worker-local state on epoch advance.
+      if (config_.tes.enable) {
+        const EpochNumber new_epoch = old_epoch + 1;
+        tes_manager_.OnEpochAdvance(new_epoch);
+        thread_pool_.EnqueueForAllThreads([&, new_epoch]() {
+          ProcessDeferredTransactions(new_epoch, false);
         });
       }
     };
@@ -280,9 +275,88 @@ class Database::Impl {
   }
 
  private:
+  void ProcessDeferredTransactions(EpochNumber epoch, bool entrusting) {
+    if (config_.tes.enable) {
+      tes_manager_.MaybeResetWorkerLocalState(epoch);
+      DrainTransactions(tes_manager_.PopDeferredTransactionsIfDraining(),
+                        entrusting);
+    }
+  }
+
+  /**
+   * DrainTransactions - Pop and finalize a list of deferred transactions.
+   */
+  void DrainTransactions(std::vector<TESManager::SuspendedTx>&& txs,
+                         bool entrusting) {
+    for (auto& stx : txs) {
+      bool committed = stx.tx->Precommit();
+      FinalizeTransaction(*stx.tx, std::move(stx.commit_clbk),
+                          std::move(stx.precommit_clbk), committed, entrusting);
+    }
+  }
+
+  /**
+   * FinalizeTransaction - Perform final post-processing, durable registration,
+   * and memory cleanup for a transaction after its precommit status has been
+   * determined.
+   */
+  void FinalizeTransaction(Transaction& tx, CallbackType commit_clbk,
+                           std::optional<CallbackType> precommit_clbk,
+                           bool committed, bool entrusting) {
+    if (committed) {
+      tx.tx_pimpl_->PostProcessing(TxStatus::Committed);
+    } else if (!tx.IsAborted()) {
+      tx.tx_pimpl_->PostProcessing(TxStatus::Aborted);
+    }
+    if (precommit_clbk)
+      precommit_clbk.value()(committed ? TxStatus::Committed
+                                       : TxStatus::Aborted);
+
+    if (committed) {
+      tx.tx_pimpl_->current_status_ = TxStatus::Committed;
+      const auto epoch = epoch_framework_.GetMyThreadLocalEpoch();
+      callback_manager_.Enqueue(std::move(commit_clbk), epoch, entrusting);
+      if (config_.enable_logging)
+        logger_.Enqueue(tx.tx_pimpl_->write_set_, epoch, entrusting);
+    } else {
+      commit_clbk(TxStatus::Aborted);
+    }
+    delete &tx;
+  }
+
+  /**
+   * TerminateTransaction - Main entry point to finalize a transaction from an
+   * active execution thread. Handles immediate abort check and TES scheduling
+   * before executing precommit.
+   */
+  bool TerminateTransaction(Transaction& tx, CallbackType commit_clbk,
+                            std::optional<CallbackType> precommit_clbk,
+                            bool entrusting) {
+    if (tx.IsAborted()) {
+      FinalizeTransaction(tx, std::move(commit_clbk), std::move(precommit_clbk),
+                          false, entrusting);
+      return false;
+    }
+
+    if (config_.tes.enable &&
+        tes_manager_.IsShiftable(tx.tx_pimpl_->read_set_.size(),
+                                 tx.tx_pimpl_->write_set_)) {
+      tes_manager_.Defer(tx, std::move(commit_clbk),
+                         std::move(precommit_clbk.value()));
+      return false;
+    }
+
+    bool committed = tx.Precommit();
+    if (committed && config_.tes.enable) {
+      tes_manager_.UpdateDirtySummary(tx.tx_pimpl_->write_set_);
+    }
+    FinalizeTransaction(tx, std::move(commit_clbk), std::move(precommit_clbk),
+                        committed, entrusting);
+    return committed;
+  }
+
   void Recovery() {
     SPDLOG_INFO("Start recovery process");
-    // Start recovery from logfiles
     EpochNumber highest_epoch = 1;
     const auto durable_epoch = logger_.GetDurableEpochFromLog();
     SPDLOG_DEBUG("  Durable epoch is resumed from {0}", highest_epoch);
@@ -300,7 +374,6 @@ class Database::Impl {
     auto&& recovery_sets = logger_.GetRecoverySetFromLogs(durable_epoch);
 
     for (auto& recovery_set : recovery_sets) {
-      // Skip deleted entries (tombstones with size=0)
       if (!recovery_set.data_item_copy.IsInitialized()) continue;
       CreateTable(recovery_set.table_name);
       auto table = GetTable(recovery_set.table_name);
@@ -334,6 +407,7 @@ class Database::Impl {
   Recovery::CPRManager checkpoint_manager_;
   std::atomic<bool> destructing_{false};
   ThreadPool thread_pool_;
+  TESManager tes_manager_;
 };
 
 }  // namespace LineairDB
