@@ -173,11 +173,42 @@ void ExecuteWorkload(LineairDB::Database& db, Workload& workload,
   }
 
   const bool measure_lat = workload.measure_latency;
-  if (use_handler) {
-    std::chrono::high_resolution_clock::time_point start_time;
-    if (measure_lat) {
-      start_time = std::chrono::high_resolution_clock::now();
+  std::chrono::high_resolution_clock::time_point start_time;
+  if (measure_lat) {
+    start_time = std::chrono::high_resolution_clock::now();
+  }
+
+  auto commit_callback = [measure_lat, start_time](LineairDB::TxStatus status) {
+    if (measure_lat && status == LineairDB::TxStatus::Committed) {
+      auto end_time = std::chrono::high_resolution_clock::now();
+      auto lat = std::chrono::duration_cast<std::chrono::microseconds>(
+                     end_time - start_time)
+                     .count();
+      thread_local_result.Get()->RecordCallbackLatency(
+          static_cast<uint64_t>(lat));
     }
+  };
+
+  auto precommit_callback = [measure_lat,
+                             start_time](LineairDB::TxStatus status) {
+    if (!finish_flag.load(std::memory_order_relaxed)) {
+      auto* result = thread_local_result.Get();
+      if (status == LineairDB::TxStatus::Committed) {
+        result->commits++;
+        if (measure_lat) {
+          auto end_time = std::chrono::high_resolution_clock::now();
+          auto lat = std::chrono::duration_cast<std::chrono::microseconds>(
+                         end_time - start_time)
+                         .count();
+          result->RecordPrecommitLatency(static_cast<uint64_t>(lat));
+        }
+      } else {
+        result->aborts++;
+      }
+    }
+  };
+
+  if (use_handler) {
     auto& tx = db.BeginTransaction();
     if (is_scan) {
       operation(tx, keys.front(), keys.back(), payload, workload.payload_size);
@@ -186,38 +217,9 @@ void ExecuteWorkload(LineairDB::Database& db, Workload& workload,
         operation(tx, key, "", payload, workload.payload_size);
       }
     }
-    bool precommitted = db.EndTransaction(
-        tx, [measure_lat, start_time](LineairDB::TxStatus status) {
-          if (measure_lat && status == LineairDB::TxStatus::Committed) {
-            auto callback_end_time = std::chrono::high_resolution_clock::now();
-            auto cb_lat = std::chrono::duration_cast<std::chrono::microseconds>(
-                              callback_end_time - start_time)
-                              .count();
-            thread_local_result.Get()->RecordCallbackLatency(
-                static_cast<uint64_t>(cb_lat));
-          }
-        });
-    if (measure_lat && precommitted) {
-      auto precommit_end_time = std::chrono::high_resolution_clock::now();
-      auto pc_lat = std::chrono::duration_cast<std::chrono::microseconds>(
-                        precommit_end_time - start_time)
-                        .count();
-      thread_local_result.Get()->RecordPrecommitLatency(
-          static_cast<uint64_t>(pc_lat));
-    }
-    auto* result = thread_local_result.Get();
-    if (!finish_flag.load(std::memory_order_relaxed)) {
-      if (precommitted) {
-        result->commits++;
-      } else {
-        result->aborts++;
-      }
-    }
+    db.EndTransaction(tx, std::move(commit_callback),
+                      std::move(precommit_callback));
   } else {
-    std::chrono::high_resolution_clock::time_point start_time;
-    if (measure_lat) {
-      start_time = std::chrono::high_resolution_clock::now();
-    }
     db.ExecuteTransaction(
         [is_scan, operation, keys, payload,
          workload](LineairDB::Transaction& tx) {
@@ -230,38 +232,7 @@ void ExecuteWorkload(LineairDB::Database& db, Workload& workload,
             }
           }
         },
-        // 2nd arg = durability callback: fires when epoch advances (WAL
-        // flushed, checkpoint done, etc.)
-        [measure_lat, start_time](LineairDB::TxStatus status) {
-          if (measure_lat && status == LineairDB::TxStatus::Committed) {
-            auto end_time = std::chrono::high_resolution_clock::now();
-            auto lat = std::chrono::duration_cast<std::chrono::microseconds>(
-                           end_time - start_time)
-                           .count();
-            thread_local_result.Get()->RecordCallbackLatency(
-                static_cast<uint64_t>(lat));
-          }
-        },
-        // 3rd arg = precommit callback: fires immediately after CC validation
-        // (before durability wait)
-        [&, measure_lat, start_time](LineairDB::TxStatus status) {
-          if (!finish_flag.load(std::memory_order_relaxed)) {
-            auto* result = thread_local_result.Get();
-            if (status == LineairDB::TxStatus::Committed) {
-              result->commits++;
-              if (measure_lat) {
-                auto end_time = std::chrono::high_resolution_clock::now();
-                auto lat =
-                    std::chrono::duration_cast<std::chrono::microseconds>(
-                        end_time - start_time)
-                        .count();
-                result->RecordPrecommitLatency(static_cast<uint64_t>(lat));
-              }
-            } else {
-              result->aborts++;
-            }
-          }
-        });
+        std::move(commit_callback), std::move(precommit_callback));
   }
 }
 
