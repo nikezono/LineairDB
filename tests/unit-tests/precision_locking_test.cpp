@@ -143,13 +143,30 @@ TEST_F(PrecisionLockingIndexTest, InsertAfterFailedInsertDueToScan) {
   }
 }
 
+// Regression test: Fence() must not underflow at DB startup.
+//
+// Background:
+//   latest_callbacked_epoch_ is initialized to 1. At startup with a low
+//   global epoch, the Fence() spin-wait:
+//
+//     while (latest_callbacked_epoch_.load() < current_epoch) { ... }
+//
+//   could underflow if current_epoch were computed as 0 (unsigned wrap),
+//   causing an infinite spin. This test verifies the guard condition works.
+//
+// Note on epoch_duration_ms:
+//   This test uses a short epoch (100ms) so that Sync() — which needs 2
+//   epoch advances — completes in ~200ms. The underflow check is independent
+//   of epoch duration; a long epoch (e.g., 10000ms) would cause Fence() +
+//   the destructor's Sync() to each take 20+ seconds, totalling 70s+ in
+//   parallel CI runs and causing intermittent timeouts.
 TEST_F(PrecisionLockingIndexTest, FenceAtStartupDoesNotUnderflow) {
   db_.reset(nullptr);
   LineairDB::Config config;
   config.enable_recovery = false;
   config.enable_logging = false;
   config.enable_checkpointing = false;
-  config.epoch_duration_ms = 10000;  // 10 seconds epoch duration
+  config.epoch_duration_ms = 100;  // Short epoch: Sync() finishes in ~200ms
   auto db = std::make_unique<LineairDB::Database>(config);
 
   // Verification: Verify that calling Fence() at startup under low epoch
