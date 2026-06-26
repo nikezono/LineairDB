@@ -237,9 +237,15 @@ class Database::Impl {
       }
 
       // Execute Callbacks
-      thread_pool_.EnqueueForAllThreads([&, durable]() {
+      thread_pool_.EnqueueForAllThreads([&, durable, old_epoch]() {
         callback_manager_.ExecuteCallbacks(durable);
-        latest_callbacked_epoch_.store(durable);
+        // NOTE: Store old_epoch (not durable) so that Fence()'s spin-wait
+        // `while (latest_callbacked_epoch_ < current_epoch)` terminates
+        // correctly. durable = FlushDurableEpoch() may lag behind old_epoch
+        // because FlushLogs(old_epoch) is enqueued asynchronously before this
+        // point. Using durable would leave latest_callbacked_epoch_ stuck at a
+        // stale value, causing Fence() to spin indefinitely.
+        latest_callbacked_epoch_.store(old_epoch);
       });
 
       if (config_.enable_checkpointing) {
